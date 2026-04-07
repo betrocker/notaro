@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg-base: #fbfcfc;
+    --color-bg-modal: #fdfefe;
+    --color-bg-input: #e5e6e5;
+    --color-bg-popup: #32373d;
+
+    --color-text-primary: #27282c;
+    --color-text-secondary: #45464a;
+
+    --color-border-default: #cbcccd;
+    --color-primary-default: #007aff;
+    --color-btn-secondary: #d7e2f2;
+    --color-icon-inbox: #99d6f5;
+
+    /* Backward compatibility for existing class names/vars. */
+    --color-inbox: var(--color-icon-inbox);
+    --color-today: #fdd92b;
+    --color-upcoming: #d63d6b;
+    --color-anytime: #4eb2a8;
+    --color-someday: #d0c38c;
+    --color-logbook: #4cbf60;
+    --color-bg: var(--color-bg-base);
+    --color-card: var(--color-bg-modal);
+    --color-sidebar: var(--color-bg-modal);
+    --color-text: var(--color-text-primary);
+    --color-muted: var(--color-text-secondary);
+    --color-border: var(--color-border-default);
+    --color-tag: var(--color-bg-input);
+    --color-checkbox: var(--color-border-default);
+    --color-auth-action-bg: var(--color-primary-default);
+    --color-auth-action-text: var(--color-bg-base);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --color-bg-base: #101318;
+      --color-bg-modal: #252a30;
+      --color-bg-input: #3d424a;
+      --color-bg-popup: #32373d;
+
+      --color-text-primary: #dbdee5;
+      --color-text-secondary: #999da4;
+
+      --color-border-default: #0d1114;
+      --color-primary-default: #4387f4;
+      --color-btn-secondary: #d7e2f2;
+      --color-icon-inbox: #47a2d1;
+
+      --color-inbox: var(--color-icon-inbox);
+      --color-today: #fdd92b;
+      --color-upcoming: #d63d6b;
+      --color-anytime: #4eb2a8;
+      --color-someday: #d0c38c;
+      --color-logbook: #4cbf60;
+      --color-bg: var(--color-bg-base);
+      --color-card: var(--color-bg-modal);
+      --color-sidebar: var(--color-bg-modal);
+      --color-text: var(--color-text-primary);
+      --color-muted: var(--color-text-secondary);
+      --color-border: var(--color-border-default);
+      --color-tag: var(--color-bg-input);
+      --color-checkbox: var(--color-border-default);
+      --color-auth-action-bg: var(--color-primary-default);
+      --color-auth-action-text: var(--color-bg-base);
+    }
+  }
+}
