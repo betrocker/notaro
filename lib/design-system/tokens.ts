@@ -18,12 +18,29 @@ export const SPACING_TOKENS = {
 } as const;
 
 export const RADIUS_TOKENS = {
+  xs: 4,
   sm: 8,
   md: 12,
+  control: 14,
   lg: 16,
   xl: 20,
   "2xl": 28,
   full: 999,
+} as const;
+
+export const BORDER_WIDTH_TOKENS = {
+  subtle: 0.5,
+  focus: 1.5,
+} as const;
+
+export const OPACITY_TOKENS = {
+  disabled: 0.4,
+} as const;
+
+export const SIZE_TOKENS = {
+  authVisibilityIcon: 19,
+  authVisibilityToggle: 36,
+  quickTaskCheckbox: 15,
 } as const;
 
 export const SHADOW_TOKENS = {
@@ -46,21 +63,23 @@ export const COLOR_TOKENS = {
     "bg.modal": "#fdfefe",
     "bg.input": "#e5e6e5",
     "bg.popup": "#32373d",
+    "bg.overlay": "#000000",
     "text.primary": "#27282c",
     "text.secondary": "#45464a",
     "border.default": "#cbcccd",
-    "primary.default": "#007aff",
-    "primary.soft": "#72a8fe",
+    "primary.default": "#5090fa",
+    "primary.soft": "#7bb0ff",
     "btn.secondary": "#d7e2f2",
     "icon.inbox": "#99d6f5",
   },
   dark: {
-    "bg.base": "#101318",
-    "bg.modal": "#252a30",
-    "bg.input": "#3d424a",
+    "bg.base": "#1D2229",
+    "bg.modal": "#2c3038",
+    "bg.input": "#3c424a",
     "bg.popup": "#32373d",
+    "bg.overlay": "#000000",
     "text.primary": "#dbdee5",
-    "text.secondary": "#999da4",
+    "text.secondary": "#848a96",
     "border.default": "#0d1114",
     "primary.default": "#4387f4",
     "primary.soft": "#72a8fe",

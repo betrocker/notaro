@@ -57,7 +57,7 @@ export default function ProjectMenu({ onClose, anchor = null }: ProjectMenuProps
         <View
           style={[
             styles.backdrop,
-            { backgroundColor: color["bg.popup"], opacity: 0.42 },
+            { backgroundColor: color["bg.overlay"], opacity: 0.42 },
           ]}
         />
       </Pressable>

@@ -8,6 +8,7 @@
     --color-bg-modal: #fdfefe;
     --color-bg-input: #e5e6e5;
     --color-bg-popup: #32373d;
+    --color-bg-overlay: #000000;
 
     --color-text-primary: #27282c;
     --color-text-secondary: #45464a;
@@ -22,7 +23,7 @@
     --color-today: #fdd92b;
     --color-upcoming: #d63d6b;
     --color-anytime: #4eb2a8;
-    --color-someday: #d0c38c;
+    --color-someday: #D1C48A;
     --color-logbook: #4cbf60;
     --color-bg: var(--color-bg-base);
     --color-card: var(--color-bg-modal);
@@ -38,10 +39,11 @@
 
   @media (prefers-color-scheme: dark) {
     :root {
-      --color-bg-base: #101318;
+      --color-bg-base: #1D2229;
       --color-bg-modal: #252a30;
       --color-bg-input: #3d424a;
       --color-bg-popup: #32373d;
+      --color-bg-overlay: #000000;
 
       --color-text-primary: #dbdee5;
       --color-text-secondary: #999da4;
@@ -55,7 +57,7 @@
       --color-today: #fdd92b;
       --color-upcoming: #d63d6b;
       --color-anytime: #4eb2a8;
-      --color-someday: #d0c38c;
+      --color-someday: #D1C48A;
       --color-logbook: #4cbf60;
       --color-bg: var(--color-bg-base);
       --color-card: var(--color-bg-modal);

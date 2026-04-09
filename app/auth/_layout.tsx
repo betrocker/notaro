@@ -46,7 +46,7 @@ function AuthModalShell() {
 const styles = StyleSheet.create({
   authModalWindow: {
     width: "85%",
-    height: "70%",
+    height: "60%",
     borderWidth: 0,
     borderRadius: 28,
     overflow: "hidden",

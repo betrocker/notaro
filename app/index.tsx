@@ -6,13 +6,13 @@ import { isSupabaseConfigured } from "@/lib/supabase";
 import { getThemeTokens } from "@/lib/theme";
 import { Icon, IconName } from "@/components/Icon";
 import { InlineComposer } from "@/components/InlineComposer";
-import MagicMenu from "@/components/MagicMenu";
+import { QuickFindPullDown } from "@/components/QuickFindPullDown";
 import { AppText as Text } from "@/components/ui";
-import { COLOR_TOKENS } from "@/lib/design-system/tokens";
+import { COLOR_TOKENS, SPACING_TOKENS } from "@/lib/design-system/tokens";
 import { useFocusEffect } from "@react-navigation/native";
-import { Stack, router } from "expo-router";
+import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -37,36 +37,56 @@ interface ListItemProps {
   titleClassName?: string;
 }
 
+type OverviewMetricKey =
+  | "todayJobs"
+  | "scheduledJobs"
+  | "unscheduledJobs"
+  | "archivedJobs"
+  | "completedJobs";
+
+const OVERVIEW_COUNT_ENABLED: Record<OverviewMetricKey, boolean> = {
+  todayJobs: false,
+  scheduledJobs: false,
+  unscheduledJobs: false,
+  archivedJobs: false,
+  completedJobs: false,
+};
+
 const OVERVIEW_ITEMS = [
   {
     icon: "today" as const,
     iconColor: "var(--color-today)",
     title: "Today",
-    key: "allJobs",
+    key: "todayJobs" as OverviewMetricKey,
+    route: "/today" as const,
   },
   {
     icon: "upcoming" as const,
     iconColor: "var(--color-upcoming)",
     title: "Upcoming",
-    key: "scheduledJobs",
+    key: "scheduledJobs" as OverviewMetricKey,
+    route: "/upcoming" as const,
   },
   {
     icon: "anytime" as const,
     iconColor: "var(--color-anytime)",
     title: "Anytime",
-    key: "unscheduledJobs",
+    key: "unscheduledJobs" as OverviewMetricKey,
+    route: "/anytime" as const,
   },
   {
     icon: "someday" as const,
     iconColor: "var(--color-someday)",
     title: "Someday",
-    key: "archivedJobs",
+    key: "archivedJobs" as OverviewMetricKey,
+    route: "/someday" as const,
   },
   {
     icon: "logbook" as const,
     iconColor: "var(--color-logbook)",
     title: "Logbook",
-    key: "completedJobs",
+    key: "completedJobs" as OverviewMetricKey,
+    route: "/logbook" as const,
   },
 ];
 
@@ -153,13 +173,14 @@ function HeaderAction({
 
 export default function HomeScreen() {
   const { colorScheme } = useColorScheme();
+  const { newProject } = useLocalSearchParams<{ newProject?: string }>();
   const theme = getThemeTokens(colorScheme === "dark");
-  const colorMode = colorScheme === "dark" ? "dark" : "light";
   const projectsDividerColor = withOpacity(COLOR_TOKENS.dark["text.primary"], 0.15);
   const [isCreatingInline, setIsCreatingInline] = useState(false);
   const [inlineText, setInlineText] = useState("");
   const [listCounts, setListCounts] = useState<Record<string, number>>({
     clients: 0,
+    todayJobs: 0,
     allJobs: 0,
     unscheduledJobs: 0,
     scheduledJobs: 0,
@@ -216,6 +237,7 @@ export default function HomeScreen() {
     } catch (error) {
       setListCounts({
         clients: 0,
+        todayJobs: 0,
         allJobs: 0,
         unscheduledJobs: 0,
         scheduledJobs: 0,
@@ -239,6 +261,18 @@ export default function HomeScreen() {
       void loadHomeData();
     }, [loadHomeData]),
   );
+
+  useEffect(() => {
+    if (newProject !== "1") {
+      return;
+    }
+
+    setInlineText("");
+    setIsInlineSaving(false);
+    inlineFade.setValue(1);
+    setIsCreatingInline(true);
+    router.replace("/");
+  }, [inlineFade, newProject]);
 
   const handleInlineSubmit = async () => {
     if (inlineSubmitLockRef.current) {
@@ -329,7 +363,10 @@ export default function HomeScreen() {
           className="flex-1"
           contentContainerStyle={{
             paddingHorizontal: 16,
-            paddingTop: 6,
+            paddingTop:
+              SPACING_TOKENS["4xl"] +
+              SPACING_TOKENS["2xl"] +
+              SPACING_TOKENS.sm,
             paddingBottom: 132,
           }}
           showsVerticalScrollIndicator={false}
@@ -340,31 +377,42 @@ export default function HomeScreen() {
             </Text>
           ) : null}
 
-          <View className="mb-6 flex-row items-center px-1">
+          <TouchableOpacity
+            className="mb-6 flex-row items-center px-1"
+            activeOpacity={0.72}
+            onPress={() => router.push("/inbox" as never)}
+          >
             <Icon name="inbox" size={22} color="var(--color-inbox)" />
-            <Text className="ml-2.5 font-semibold text-body-lg text-things-text">
-              Quick Tasks
-            </Text>
-          </View>
+            <View className="ml-2 flex-1">
+              <Text variant="bodyLg" className="font-semibold text-things-text">
+                Quick Tasks
+              </Text>
+            </View>
+            {(listCounts.unscheduledJobs ?? 0) > 0 ? (
+              <View className="min-w-[28px] items-end">
+                <Text className="font-medium text-label-sm text-things-muted">
+                  {listCounts.unscheduledJobs}
+                </Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
 
           <View className="mb-8">
             {OVERVIEW_ITEMS.map((item) => (
-              <ListItem
-                key={item.title}
-                icon={item.icon}
-                iconColor={item.iconColor}
-                title={item.title}
-                count={listCounts[item.key] ?? 0}
-                dense
-                onPress={() => {
-                  if (item.key === "unscheduledJobs") {
-                    router.push("/inbox" as never);
-                    return;
+              <View key={item.title} className={item.key === "completedJobs" ? "mt-4" : ""}>
+                <ListItem
+                  icon={item.icon}
+                  iconColor={item.iconColor}
+                  title={item.title}
+                  count={
+                    OVERVIEW_COUNT_ENABLED[item.key]
+                      ? (listCounts[item.key] ?? 0)
+                      : 0
                   }
-
-                  console.log(`${item.title} screen is not implemented yet`);
-                }}
-              />
+                  dense
+                  onPress={() => router.push(item.route as never)}
+                />
+              </View>
             ))}
           </View>
 
@@ -419,6 +467,19 @@ export default function HomeScreen() {
 
           </View>
         </ScrollView>
+
+        <View
+          pointerEvents="box-none"
+          style={{
+            position: "absolute",
+            top: SPACING_TOKENS.md,
+            left: SPACING_TOKENS.lg,
+            right: SPACING_TOKENS.lg,
+            zIndex: 30,
+          }}
+        >
+          <QuickFindPullDown />
+        </View>
 
         <View
           pointerEvents="box-none"
@@ -482,17 +543,6 @@ export default function HomeScreen() {
             </View>
           </TouchableOpacity>
         </View>
-
-        <MagicMenu
-          onNewTask={() => router.push("/new-todo")}
-          onNewProject={() => {
-            setInlineText("");
-            setIsInlineSaving(false);
-            inlineFade.setValue(1);
-            setIsCreatingInline(true);
-          }}
-          onNewClient={() => console.log("New Client is not implemented yet")}
-        />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

@@ -15,7 +15,6 @@ export function AuthScreenScaffold({
 }: PropsWithChildren<{
   headerAction?: {
     icon: "chevronLeft" | "close";
-    iconSize: number;
     onPress: () => void;
   };
   theme: ReturnType<typeof getThemeTokens>;
@@ -38,7 +37,6 @@ export function AuthScreenScaffold({
           <View style={styles.headerInner}>
             <ModalCircleButton
               icon={headerAction.icon}
-              iconSize={headerAction.iconSize}
               theme={theme}
               onPress={headerAction.onPress}
             />
@@ -105,8 +103,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   headerSpacer: {
-    width: 42,
-    height: 42,
+    width: 36,
+    height: 36,
   },
   root: {
     flex: 1,

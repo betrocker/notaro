@@ -1,35 +1,149 @@
+import { Icon } from "@/components/Icon";
+import ProjectHeader from "@/components/ProjectHeader";
+import { AppText as Text } from "@/components/ui";
+import {
+  BORDER_WIDTH_TOKENS,
+  COLOR_TOKENS,
+  RADIUS_TOKENS,
+  SIZE_TOKENS,
+} from "@/lib/design-system/tokens";
 import { completeInboxTodo, fetchInboxTodos } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { Icon } from "@/components/Icon";
-import MagicMenu from "@/components/MagicMenu";
 import { useFocusEffect } from "@react-navigation/native";
-import { Stack, router } from "expo-router";
-import React, { useCallback, useState } from "react";
-import { Dimensions, TouchableOpacity, View } from "react-native";
-import { AppText as Text } from "@/components/ui";
+import { router, Stack } from "expo-router";
+import { useColorScheme } from "nativewind";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { TouchableOpacity, View } from "react-native";
 import Animated, {
   Extrapolation,
   interpolate,
+  runOnJS,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
+  withTiming,
 } from "react-native-reanimated";
 
-const { height: SCREEN_HEIGHT } = Dimensions.get("window");
-
-interface InboxTodo {
+type QuickTask = {
   id: string;
   title: string;
-  notes: string | null;
-  clientName: string | null;
+};
+
+const CHECKED_HOLD_DURATION_MS = 2300;
+const CHECKED_FADE_OUT_DURATION_MS = 320;
+
+function withOpacity(hexColor: string, opacity: number) {
+  const sanitized = hexColor.replace("#", "");
+  const full =
+    sanitized.length === 3
+      ? sanitized
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : sanitized;
+
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
-export default function InboxScreen() {
-  const [tasks, setTasks] = useState<InboxTodo[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const scrollY = useSharedValue(0);
+function QuickTaskRow({
+  task,
+  checkboxSize,
+  checkboxBorderColor,
+  checkedColor,
+  checkedIconColor,
+  isChecked,
+  isFading,
+  isBusy,
+  onCheckPress,
+  onFadeComplete,
+}: {
+  task: QuickTask;
+  checkboxSize: number;
+  checkboxBorderColor: string;
+  checkedColor: string;
+  checkedIconColor: string;
+  isChecked: boolean;
+  isFading: boolean;
+  isBusy: boolean;
+  onCheckPress: (taskId: string) => void;
+  onFadeComplete: (taskId: string) => void;
+}) {
+  const rowOpacity = useSharedValue(1);
+  const hasFadeStartedRef = useRef(false);
 
-  const loadInbox = useCallback(async () => {
+  useEffect(() => {
+    if (!isFading || hasFadeStartedRef.current) {
+      return;
+    }
+
+    hasFadeStartedRef.current = true;
+    rowOpacity.value = withDelay(
+      CHECKED_HOLD_DURATION_MS,
+      withTiming(0, { duration: CHECKED_FADE_OUT_DURATION_MS }, (finished) => {
+        if (finished) {
+          runOnJS(onFadeComplete)(task.id);
+        }
+      }),
+    );
+  }, [isFading, onFadeComplete, rowOpacity, task.id]);
+
+  const rowAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: rowOpacity.value,
+  }));
+
+  return (
+    <Animated.View
+      className="flex-row items-center py-3"
+      style={rowAnimatedStyle}
+    >
+      <TouchableOpacity
+        className="mr-3 items-center justify-center"
+        activeOpacity={0.72}
+        onPress={() => onCheckPress(task.id)}
+        disabled={isBusy}
+        style={{
+          width: checkboxSize,
+          height: checkboxSize,
+          borderRadius: RADIUS_TOKENS.xs,
+          borderWidth: BORDER_WIDTH_TOKENS.subtle,
+          borderColor: isChecked ? checkedColor : checkboxBorderColor,
+          backgroundColor: isChecked ? checkedColor : "transparent",
+        }}
+      >
+        {isChecked ? (
+          <Icon name="check" size={10} color={checkedIconColor} />
+        ) : null}
+      </TouchableOpacity>
+      <Text className="flex-1 font-regular text-label-sm text-things-text">
+        {task.title}
+      </Text>
+    </Animated.View>
+  );
+}
+
+export default function QuickTasksScreen() {
+  const { colorScheme } = useColorScheme();
+  const colorMode = colorScheme === "dark" ? "dark" : "light";
+  const [tasks, setTasks] = useState<QuickTask[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [fadingIds, setFadingIds] = useState<Set<string>>(new Set());
+  const scrollY = useSharedValue(0);
+  const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
+  const checkboxBorderColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.7 : 0.4,
+  );
+  const checkedColor = COLOR_TOKENS[colorMode]["primary.soft"];
+  const checkedIconColor = COLOR_TOKENS.light["text.primary"];
+
+  const loadQuickTasks = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setErrorMessage(
         "Supabase nije povezan. Dodaj EXPO_PUBLIC_SUPABASE_URL i EXPO_PUBLIC_SUPABASE_ANON_KEY u .env.",
@@ -41,30 +155,27 @@ export default function InboxScreen() {
     try {
       const data = await fetchInboxTodos();
       setTasks(
-        data.map((todo) => ({
-          id: todo.id,
-          title: todo.title ?? "Bez naslova",
-          notes: todo.description,
-          clientName:
-            !Array.isArray(todo.clients) && todo.clients
-              ? (todo.clients.name ?? null)
-              : null,
+        data.map((task) => ({
+          id: task.id,
+          title: task.title ?? "Bez naslova",
         })),
       );
+      setCheckingIds(new Set());
+      setCheckedIds(new Set());
+      setFadingIds(new Set());
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "Nisam uspeo da ucitam poslove bez termina.",
+        error instanceof Error ? error.message : "Nisam uspeo da ucitam quick tasks.",
       );
+      setTasks([]);
     }
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void loadInbox();
-    }, [loadInbox]),
+      void loadQuickTasks();
+    }, [loadQuickTasks]),
   );
 
   const scrollHandler = useAnimatedScrollHandler({
@@ -76,63 +187,137 @@ export default function InboxScreen() {
   const headerTitleAnimatedStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       scrollY.value,
-      [30, 60],
+      [44, 86],
       [0, 1],
       Extrapolation.CLAMP,
     );
     const translateY = interpolate(
       scrollY.value,
-      [30, 60],
-      [10, 0],
+      [44, 86],
+      [8, 0],
       Extrapolation.CLAMP,
     );
 
-    return { opacity, transform: [{ translateY }] };
+    return {
+      opacity,
+      transform: [{ translateY }],
+    };
   });
 
-  const HeaderTitle = () => (
-    <Animated.View style={headerTitleAnimatedStyle}>
-      <Text className="font-semibold text-body-lg text-things-text">
-        Bez termina
-      </Text>
-    </Animated.View>
-  );
+  const heroTitleAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(
+      scrollY.value,
+      [0, 48],
+      [1, 0],
+      Extrapolation.CLAMP,
+    );
+    const translateY = interpolate(
+      scrollY.value,
+      [0, 48],
+      [0, -14],
+      Extrapolation.CLAMP,
+    );
+    const scale = interpolate(
+      scrollY.value,
+      [0, 48],
+      [1, 0.96],
+      Extrapolation.CLAMP,
+    );
+
+    return {
+      opacity,
+      transform: [{ translateY }, { scale }],
+    };
+  });
+
+  const handleCompleteTask = useCallback(async (taskId: string) => {
+    let shouldProceed = false;
+    setCheckingIds((current) => {
+      if (current.has(taskId)) {
+        return current;
+      }
+
+      shouldProceed = true;
+      const next = new Set(current);
+      next.add(taskId);
+      return next;
+    });
+
+    if (!shouldProceed) {
+      return;
+    }
+
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      next.add(taskId);
+      return next;
+    });
+
+    try {
+      await completeInboxTodo(taskId);
+      setFadingIds((current) => {
+        const next = new Set(current);
+        next.add(taskId);
+        return next;
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setCheckedIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+      setErrorMessage(
+        error instanceof Error ? error.message : "Nisam uspeo da zavrsim task.",
+      );
+    } finally {
+      setCheckingIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  }, []);
+
+  const handleFadeComplete = useCallback((taskId: string) => {
+    setTasks((current) => current.filter((task) => task.id !== taskId));
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      next.delete(taskId);
+      return next;
+    });
+    setFadingIds((current) => {
+      const next = new Set(current);
+      next.delete(taskId);
+      return next;
+    });
+  }, []);
 
   return (
-    <>
-      <Stack.Screen
-        options={{
-          headerShadowVisible: false,
-          headerStyle: { backgroundColor: "var(--color-bg)" },
-          headerTitle: () => <HeaderTitle />,
-          headerLeft: () => (
-            <TouchableOpacity
-              onPress={() => router.back()}
-              className="mr-4 flex-row items-center"
-            >
-              <Icon name="chevronLeft" size={18} color="var(--color-inbox)" />
-              <Text className="ml-1 font-regular text-body-lg text-things-inbox">
-                Pregled
-              </Text>
-            </TouchableOpacity>
-          ),
-          headerRight: () => (
-            <TouchableOpacity onPress={() => console.log("Select/Edit Jobs")}>
-              <Icon name="ellipsis" size={24} color="var(--color-inbox)" />
-            </TouchableOpacity>
-          ),
-        }}
+    <View className="flex-1 bg-things-bg">
+      <Stack.Screen options={{ headerShown: false }} />
+
+      <ProjectHeader
+        title="Quick Tasks"
+        titleAnimatedStyle={headerTitleAnimatedStyle}
+        onBack={() => router.back()}
       />
 
       <Animated.ScrollView
-        className="flex-1 bg-things-bg px-4 pt-2"
+        className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
-        contentContainerStyle={{ paddingBottom: 120 }}
+        contentContainerStyle={{ paddingTop: 94, paddingBottom: 32, flexGrow: 1 }}
       >
-        <Text className="mb-6 font-bold text-things-title-large tracking-tight text-things-inbox">
-          Poslovi bez termina
-        </Text>
+        <Animated.View
+          className="mb-6 flex-row items-center"
+          style={heroTitleAnimatedStyle}
+        >
+          <Icon name="inbox" size={22} color="var(--color-inbox)" />
+          <Text className="ml-2.5 font-bold text-things-text text-things-title-large">
+            Quick Tasks
+          </Text>
+        </Animated.View>
 
         {errorMessage ? (
           <Text className="mb-4 font-regular text-label-sm leading-5 text-things-muted">
@@ -140,73 +325,31 @@ export default function InboxScreen() {
           </Text>
         ) : null}
 
-        {tasks.length === 0 ? (
-          <View
-            className="flex-1 items-center justify-center"
-            style={{ height: SCREEN_HEIGHT * 0.5 }}
-          >
-            <Icon name="inbox" size={64} color="var(--color-border)" />
-            <Text className="mt-4 text-center font-regular text-things-muted text-label-sm">
-              {errorMessage
-                ? "Povezi Supabase da vidis prave poslove."
-                : "Nema poslova bez termina."}
-            </Text>
+        {tasks.length > 0 ? (
+          <View className="mb-20">
+            {tasks.map((task) => (
+              <QuickTaskRow
+                key={task.id}
+                task={task}
+                checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                checkboxBorderColor={checkboxBorderColor}
+                checkedColor={checkedColor}
+                checkedIconColor={checkedIconColor}
+                isChecked={checkedIds.has(task.id)}
+                isFading={fadingIds.has(task.id)}
+                isBusy={checkingIds.has(task.id)}
+                onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                onFadeComplete={handleFadeComplete}
+              />
+            ))}
           </View>
         ) : (
-          <View className="mb-8 overflow-hidden rounded-2xl bg-things-card">
-            {tasks.map((task, index) => (
-              <View
-                key={task.id}
-                className={`flex-row items-start p-4 ${index !== tasks.length - 1 ? "border-b border-things-border/60" : ""}`}
-              >
-                <TouchableOpacity
-                  className="mr-3 mt-0.5 h-6 w-6 rounded-full border-2 border-things-checkbox"
-                  onPress={async () => {
-                    try {
-                      await completeInboxTodo(task.id);
-                      setTasks((currentTasks) =>
-                        currentTasks.filter(
-                          (currentTask) => currentTask.id !== task.id,
-                        ),
-                      );
-                    } catch (error) {
-                      setErrorMessage(
-                        error instanceof Error
-                          ? error.message
-                          : "Nisam uspeo da zavrsim posao.",
-                      );
-                    }
-                  }}
-                />
-
-                <View className="flex-1">
-                  <Text className="font-medium leading-5 text-things-body text-things-text">
-                    {task.title}
-                  </Text>
-
-                  {task.clientName ? (
-                    <Text className="mt-1 font-regular text-label-sm leading-5 text-things-muted">
-                      {task.clientName}
-                    </Text>
-                  ) : null}
-
-                  {task.notes ? (
-                    <Text className="mt-1 font-regular text-label-sm leading-5 text-things-muted">
-                      {task.notes}
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            ))}
+          <View className="flex-1 items-center justify-center">
+            <Icon name="inbox" size={96} color={emptyIconColor} />
           </View>
         )}
       </Animated.ScrollView>
 
-      <MagicMenu
-        onNewTask={() => router.push("/new-todo")}
-        onNewProject={() => router.push("/")}
-        onNewClient={() => console.log("New Client is not implemented yet")}
-      />
-    </>
+    </View>
   );
 }

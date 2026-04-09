@@ -61,6 +61,13 @@ const CANONICAL_TYPOGRAPHY_VARIANTS = {
     fontFamily: "regular",
     maxFontSizeMultiplier: 1.2,
   },
+  tiny: {
+    size: 11,
+    lineHeight: 14,
+    letterSpacing: -0.02,
+    fontFamily: "regular",
+    maxFontSizeMultiplier: 1.15,
+  },
 } as const satisfies Record<string, RawTextVariant>;
 
 type CanonicalTypographyVariant = keyof typeof CANONICAL_TYPOGRAPHY_VARIANTS;
@@ -75,6 +82,7 @@ const TYPOGRAPHY_ALIASES = {
   bodySm: "labelSm",
   labelMd: "label",
   caption: "footer",
+  captionXs: "tiny",
   buttonMd: "label",
   buttonSm: "labelSm",
   onboardingTitle: "largeTitle",

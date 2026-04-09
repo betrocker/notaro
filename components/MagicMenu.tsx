@@ -9,6 +9,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppText as Text } from "@/components/ui";
 import { COLOR_TOKENS, SHADOW_TOKENS } from "@/lib/design-system/tokens";
 import Animated, {
@@ -77,6 +78,7 @@ export default function MagicMenu({
   onNewClient,
 }: ThingsMagicMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
   const colorMode = isDark ? "dark" : "light";
@@ -91,6 +93,9 @@ export default function MagicMenu({
   const secondaryTextColor = withOpacity(COLOR_TOKENS.dark["text.secondary"], 0.86);
   const overlayColor = COLOR_TOKENS.dark["bg.base"];
   const overlayOpacity = isDark ? 0.5 : 0.32;
+  const floatingBottom = Math.max(insets.bottom + 8, 20);
+  const floatingPositionStyle =
+    Platform.OS === "web" ? ({ position: "fixed" } as const) : styles.absolutePosition;
 
   const menuProgress = useSharedValue(0);
   const buttonScale = useSharedValue(1);
@@ -137,18 +142,18 @@ export default function MagicMenu({
         { scale: buttonScale.value },
       ],
       pointerEvents: menuProgress.value < 0.5 ? "auto" : "none",
-      position: "absolute",
-      bottom: 0,
-      right: 24,
     };
   });
 
   return (
-    <>
-      {isOpen && (
+    <View
+      pointerEvents="box-none"
+      style={[styles.portalLayer, floatingPositionStyle]}
+    >
+      {isOpen ? (
         <Animated.View
           style={[
-            StyleSheet.absoluteFillObject,
+            styles.overlayFill,
             {
               zIndex: 40,
               backgroundColor: overlayColor,
@@ -156,16 +161,13 @@ export default function MagicMenu({
             },
           ]}
         >
-          <Pressable
-            style={StyleSheet.absoluteFillObject}
-            onPress={() => closeMenu()}
-          />
+          <Pressable style={styles.overlayFill} onPress={() => closeMenu()} />
         </Animated.View>
-      )}
+      ) : null}
 
       <View
         pointerEvents="box-none"
-        className="absolute bottom-14 left-0 right-0 z-50 items-center"
+        style={[styles.fabContainer, { bottom: floatingBottom }]}
       >
         <Animated.View
           style={[
@@ -230,7 +232,9 @@ export default function MagicMenu({
           </BlurView>
         </Animated.View>
 
-        <Animated.View style={mainButtonAnimatedStyle}>
+        <Animated.View
+          style={[mainButtonAnimatedStyle, { alignSelf: "flex-end", marginRight: 24 }]}
+        >
           <TouchableOpacity
             activeOpacity={0.9}
             onPress={openMenu}
@@ -252,11 +256,37 @@ export default function MagicMenu({
           </TouchableOpacity>
         </Animated.View>
       </View>
-    </>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  absolutePosition: {
+    position: "absolute",
+  },
+  portalLayer: {
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 50,
+    elevation: 50,
+  },
+  overlayFill: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+  },
+  fabContainer: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    zIndex: 50,
+    elevation: 50,
+    alignItems: "center",
+  },
   shadow: {
     ...Platform.select({
       ios: {

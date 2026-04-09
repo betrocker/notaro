@@ -69,6 +69,7 @@ async function requireCurrentUser() {
 export interface HomeData {
   metrics: {
     clients: number;
+    todayJobs: number;
     allJobs: number;
     unscheduledJobs: number;
     scheduledJobs: number;
@@ -77,6 +78,13 @@ export interface HomeData {
     invoices: number;
   };
   clients: Array<ProjectView & { jobCount: number }>;
+}
+
+function toDateOnlyIso(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export async function fetchHomeData(): Promise<HomeData> {
@@ -128,17 +136,31 @@ export async function fetchHomeData(): Promise<HomeData> {
     };
   });
 
+  const todayDate = toDateOnlyIso(new Date());
   const metrics = {
     clients: projectsResult.data.length,
+    todayJobs: jobsResult.data.filter((job) => {
+      return (
+        job.scheduled_date === todayDate &&
+        !job.completed_at &&
+        !job.archived_at
+      );
+    }).length,
     allJobs: jobsResult.data.length,
     unscheduledJobs: jobsResult.data.filter(
-      (job) => !job.scheduled_date && !job.completed_at && !job.archived_at,
+      (job) =>
+        !job.scheduled_date &&
+        !job.completed_at &&
+        !job.archived_at &&
+        job.status !== "someday",
     ).length,
     scheduledJobs: jobsResult.data.filter(
       (job) => Boolean(job.scheduled_date) && !job.completed_at && !job.archived_at,
     ).length,
     completedJobs: jobsResult.data.filter((job) => Boolean(job.completed_at)).length,
-    archivedJobs: jobsResult.data.filter((job) => Boolean(job.archived_at)).length,
+    archivedJobs: jobsResult.data.filter(
+      (job) => Boolean(job.archived_at) || job.status === "someday",
+    ).length,
     invoices: invoicesResult.count ?? 0,
   };
 
@@ -150,12 +172,70 @@ export async function fetchInboxTodos() {
   const userId = user.id;
   const result = await supabase
     .from("jobs")
-    .select("id, title, description, client_id, clients(name)")
+    .select("id, title, description, client_id")
     .eq("user_id", userId)
     .is("scheduled_date", null)
     .is("completed_at", null)
     .is("archived_at", null)
+    .or("status.is.null,status.neq.someday")
     .order("created_at", { ascending: false });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data;
+}
+
+export async function fetchTodayTodos() {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const todayDate = toDateOnlyIso(new Date());
+  const result = await supabase
+    .from("jobs")
+    .select("id, title, description, client_id")
+    .eq("user_id", userId)
+    .eq("scheduled_date", todayDate)
+    .is("completed_at", null)
+    .is("archived_at", null)
+    .order("created_at", { ascending: false });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data;
+}
+
+export async function fetchSomedayTodos() {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const result = await supabase
+    .from("jobs")
+    .select("id, title, description, client_id")
+    .eq("user_id", userId)
+    .eq("status", "someday")
+    .is("completed_at", null)
+    .is("archived_at", null)
+    .order("created_at", { ascending: false });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data;
+}
+
+export async function fetchLogbookTodos() {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const result = await supabase
+    .from("jobs")
+    .select("id, title, completed_at")
+    .eq("user_id", userId)
+    .not("completed_at", "is", null)
+    .is("archived_at", null)
+    .order("completed_at", { ascending: false });
 
   if (result.error) {
     throw result.error;
@@ -200,9 +280,12 @@ export async function createTodo(input: {
   title: string;
   notes?: string;
   projectId?: string | null;
+  scheduledDate?: Date | null;
+  status?: "new" | "someday";
 }) {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
+  const normalizedStatus = input.status === "someday" ? "someday" : null;
 
   const result = await supabase
     .from("jobs")
@@ -210,7 +293,8 @@ export async function createTodo(input: {
       title: input.title,
       description: input.notes?.trim() || null,
       client_id: input.projectId ?? null,
-      status: "new",
+      status: normalizedStatus,
+      scheduled_date: input.scheduledDate ? toDateOnlyIso(input.scheduledDate) : null,
       user_id: userId,
     })
     .select("id, title, description, client_id, status, scheduled_date, created_at")
@@ -256,14 +340,16 @@ export async function createProject(title: string) {
 }
 
 export async function completeInboxTodo(jobId: string) {
-  const supabase = assertSupabaseConfigured();
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
   const result = await supabase
     .from("jobs")
     .update({
       status: "completed",
       completed_at: new Date().toISOString(),
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("user_id", userId);
 
   if (result.error) {
     throw result.error;

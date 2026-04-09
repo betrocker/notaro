@@ -1,10 +1,16 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { TouchableOpacity, View } from "react-native";
 
-import { AuthScreenScaffold } from "@/components/AuthScreenScaffold";
 import { useAuth } from "@/components/AuthProvider";
-import { AppText as Text, AppTextInput } from "@/components/ui";
-import { COLOR_TOKENS } from "@/lib/design-system/tokens";
+import { AuthScreenScaffold } from "@/components/AuthScreenScaffold";
+import { AppTextInput, AppText as Text } from "@/components/ui";
+import {
+  BORDER_WIDTH_TOKENS,
+  COLOR_TOKENS,
+  OPACITY_TOKENS,
+  RADIUS_TOKENS,
+  SPACING_TOKENS,
+} from "@/lib/design-system/tokens";
 import { getThemeTokens } from "@/lib/theme";
 
 export function AuthResetPage({
@@ -40,9 +46,14 @@ export function AuthResetPage({
   const resetButtonBg = COLOR_TOKENS.dark["primary.default"];
   const primaryActionText = COLOR_TOKENS[colorMode]["text.primary"];
   const inputLabelColor = theme.onboardingTitle;
-  const focusBorderColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const focusBorderColor = COLOR_TOKENS[colorMode]["primary.soft"];
   const placeholderColor = COLOR_TOKENS[colorMode]["text.secondary"];
   const idleBorderColor = placeholderColor;
+  const fieldHeight = SPACING_TOKENS["4xl"];
+  const controlRadius = RADIUS_TOKENS.control;
+  const focusBorderWidth = BORDER_WIDTH_TOKENS.focus;
+  const subtleBorderWidth = BORDER_WIDTH_TOKENS.subtle;
+  const disabledOpacity = OPACITY_TOKENS.disabled;
 
   const handleReset = useCallback(async () => {
     if (!canSubmit) return;
@@ -72,7 +83,7 @@ export function AuthResetPage({
     <AuthScreenScaffold
       theme={theme}
       title="Reset Password"
-      headerAction={{ icon: "chevronLeft", iconSize: 27, onPress: onBack }}
+      headerAction={{ icon: "chevronLeft", onPress: onBack }}
     >
       <Text
         className="mb-2 ml-1 font-semibold text-label-md"
@@ -81,10 +92,12 @@ export function AuthResetPage({
         Email
       </Text>
       <View
-        className="h-[40px] rounded-[14px] px-3 py-0"
+        className="px-3 py-0"
         style={{
+          height: fieldHeight,
+          borderRadius: controlRadius,
           backgroundColor: fieldBg,
-          borderWidth: isInputFocused ? 1.5 : 0.5,
+          borderWidth: isInputFocused ? focusBorderWidth : subtleBorderWidth,
           borderColor: isInputFocused ? focusBorderColor : idleBorderColor,
         }}
       >
@@ -129,10 +142,12 @@ export function AuthResetPage({
         activeOpacity={0.82}
         disabled={!canSubmit}
         onPress={() => void handleReset()}
-        className="mt-5 h-[40px] px-4 items-center justify-center rounded-[14px]"
+        className="mt-5 px-4 items-center justify-center"
         style={{
+          height: fieldHeight,
+          borderRadius: controlRadius,
           backgroundColor: resetButtonBg,
-          opacity: canSubmit ? 1 : 0.4,
+          opacity: canSubmit ? 1 : disabledOpacity,
         }}
       >
         <Text

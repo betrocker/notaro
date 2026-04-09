@@ -30,7 +30,6 @@ export function AuthIntroPage({
       titleIconSize={30}
       headerAction={{
         icon: "close",
-        iconSize: 22,
         onPress: onClose,
       }}
     >

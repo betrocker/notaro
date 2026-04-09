@@ -64,7 +64,6 @@ export default function UpdatePasswordScreen() {
       title="New Password"
       headerAction={{
         icon: "close",
-        iconSize: 22,
         onPress: () => router.dismissTo("/welcome" as never),
       }}
     >

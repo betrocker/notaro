@@ -6,15 +6,16 @@ import {
   useFonts,
 } from "@expo-google-fonts/inter";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Redirect, Stack, useSegments } from "expo-router";
+import { Redirect, Stack, router, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as SystemUI from "expo-system-ui";
 import { useColorScheme } from "nativewind";
 import { useEffect, useState } from "react";
-import { Platform, Text, TextInput } from "react-native";
+import { Platform, Text, TextInput, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "@/components/AuthProvider";
+import MagicMenu from "@/components/MagicMenu";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
 import {
   DEFAULT_TEXT_MAX_MULTIPLIER,
@@ -155,6 +156,8 @@ function RootNavigator({
   const authScreen = segments[1] as string | undefined;
   const inAuth = rootSegment === "auth";
   const onWelcome = rootSegment === "welcome";
+  const inSettings = rootSegment === "settings";
+  const inNewTodo = rootSegment === "new-todo";
 
   if (!session) {
     if (
@@ -178,55 +181,80 @@ function RootNavigator({
     }
   }
 
+  const showGlobalMagicMenu =
+    !!session && !inAuth && !onWelcome && !inSettings && !inNewTodo;
+
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        animation: stackAnimation,
-        gestureEnabled: true,
-        fullScreenGestureEnabled: Platform.OS === "ios",
-        contentStyle: { backgroundColor: stackBackgroundColor },
-      }}
-    >
-      <Stack.Screen
-        name="welcome"
-        options={{ headerShown: false, animation: "fade" }}
-      />
-      <Stack.Screen
-        name="auth"
-        options={{
-          headerShown: false,
-          presentation: "transparentModal",
-          animation: "none",
-          contentStyle: { backgroundColor: "transparent" },
-        }}
-      />
-      <Stack.Screen name="index" options={{ headerShown: false }} />
-      <Stack.Screen name="inbox" options={{ headerShown: false }} />
-      <Stack.Screen
-        name="project/[id]"
-        options={{
+    <View style={{ flex: 1 }}>
+      <Stack
+        screenOptions={{
           headerShown: false,
           animation: stackAnimation,
+          animationDuration: Platform.OS === "android" ? 180 : undefined,
+          gestureEnabled: true,
+          fullScreenGestureEnabled: Platform.OS === "ios",
+          contentStyle: { backgroundColor: stackBackgroundColor },
         }}
-      />
-      <Stack.Screen
-        name="settings"
-        options={{
-          presentation: "transparentModal",
-          animation: "fade",
-          headerShown: false,
-          contentStyle: { backgroundColor: "transparent" },
-        }}
-      />
-      <Stack.Screen
-        name="new-todo"
-        options={{
-          presentation: "transparentModal",
-          animation: "fade",
-          headerShown: false,
-        }}
-      />
-    </Stack>
+      >
+        <Stack.Screen
+          name="welcome"
+          options={{ headerShown: false, animation: "fade" }}
+        />
+        <Stack.Screen
+          name="auth"
+          options={{
+            headerShown: false,
+            presentation: "transparentModal",
+            animation: "none",
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="today" options={{ headerShown: false }} />
+        <Stack.Screen name="inbox" options={{ headerShown: false }} />
+        <Stack.Screen name="upcoming" options={{ headerShown: false }} />
+        <Stack.Screen name="anytime" options={{ headerShown: false }} />
+        <Stack.Screen name="someday" options={{ headerShown: false }} />
+        <Stack.Screen name="logbook" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="project/[id]"
+          options={{
+            headerShown: false,
+            animation: stackAnimation,
+          }}
+        />
+        <Stack.Screen
+          name="settings"
+          options={{
+            presentation: "transparentModal",
+            animation: "fade",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+        <Stack.Screen
+          name="new-todo"
+          options={{
+            presentation: "transparentModal",
+            animation: "none",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+      </Stack>
+
+      {showGlobalMagicMenu ? (
+        <MagicMenu
+          onNewTask={() => router.push("/new-todo")}
+          onNewProject={() =>
+            router.push({
+              pathname: "/",
+              params: { newProject: "1" },
+            })
+          }
+          onNewClient={() => console.log("New Client is not implemented yet")}
+        />
+      ) : null}
+    </View>
   );
 }

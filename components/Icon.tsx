@@ -137,6 +137,10 @@ const ICON_MAP = {
     ios: "trash",
     android: "delete",
   },
+  flag: {
+    ios: "flag.fill",
+    android: "flag-outline",
+  },
   eye: {
     ios: "eye",
     android: "eye-outline",
@@ -166,11 +170,11 @@ interface IconProps {
     | "black";
 }
 
-const LIST_ICON_COLORS = {
+export const LIST_ICON_COLORS = {
   "--color-today": "#fdd92b",
   "--color-upcoming": "#d63d6b",
   "--color-anytime": "#4eb2a8",
-  "--color-someday": "#d0c38c",
+  "--color-someday": "#D1C48A",
   "--color-logbook": "#4cbf60",
 } as const;
 
