@@ -35,13 +35,21 @@ create table if not exists public.jobs (
   client_id uuid references public.clients(id) on delete set null,
   title text,
   description text,
+  checklist_items jsonb not null default '[]'::jsonb,
   price numeric,
   status text,
   scheduled_date date,
+  deadline_date date,
   created_at timestamp without time zone default now(),
   completed_at timestamp with time zone,
   archived_at timestamp with time zone
 );
+
+alter table public.jobs
+  add column if not exists checklist_items jsonb not null default '[]'::jsonb;
+
+alter table public.jobs
+  add column if not exists deadline_date date;
 
 create table if not exists public.expenses (
   id uuid primary key default uuid_generate_v4(),

@@ -26,7 +26,13 @@ type LogbookTask = {
   id: string;
   title: string;
   completedAt: string | null;
-  isToday: boolean;
+  completedDate: Date | null;
+};
+
+type MonthSection = {
+  key: string;
+  label: string;
+  tasks: LogbookTask[];
 };
 
 function withOpacity(hexColor: string, opacity: number) {
@@ -56,10 +62,9 @@ function formatCompletedDate(dateString: string | null) {
     return "";
   }
 
-  return date.toLocaleDateString("en-US", {
-    day: "numeric",
-    month: "short",
-  });
+  const day = date.getDate();
+  const month = date.getMonth() + 1;
+  return `${day}.${month}.`;
 }
 
 function isSameDay(left: Date, right: Date) {
@@ -68,6 +73,20 @@ function isSameDay(left: Date, right: Date) {
     left.getMonth() === right.getMonth() &&
     left.getDate() === right.getDate()
   );
+}
+
+function startOfDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, amount: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + amount);
+  return next;
+}
+
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
 export default function LogbookScreen() {
@@ -92,15 +111,12 @@ export default function LogbookScreen() {
 
     try {
       const data = await fetchLogbookTodos();
-      const today = new Date();
       setTasks(
         data.map((task) => ({
+          completedDate: task.completed_at ? new Date(task.completed_at) : null,
           id: task.id,
           title: task.title ?? "Bez naslova",
           completedAt: task.completed_at,
-          isToday:
-            !!task.completed_at &&
-            isSameDay(new Date(task.completed_at), today),
         })),
       );
       setErrorMessage(null);
@@ -170,8 +186,82 @@ export default function LogbookScreen() {
     };
   });
 
-  const todayTasks = tasks.filter((task) => task.isToday);
-  const olderTasks = tasks.filter((task) => !task.isToday);
+  const todayDate = startOfDay(new Date());
+  const yesterdayDate = addDays(todayDate, -1);
+
+  const todayTasks = tasks.filter(
+    (task) => !!task.completedDate && isSameDay(task.completedDate, todayDate),
+  );
+  const yesterdayTasks = tasks.filter(
+    (task) => !!task.completedDate && isSameDay(task.completedDate, yesterdayDate),
+  );
+
+  const monthSectionsMap = new Map<string, MonthSection>();
+  for (const task of tasks) {
+    if (!task.completedDate) {
+      continue;
+    }
+
+    if (
+      isSameDay(task.completedDate, todayDate) ||
+      isSameDay(task.completedDate, yesterdayDate)
+    ) {
+      continue;
+    }
+
+    const key = monthKey(task.completedDate);
+    const label = task.completedDate.toLocaleDateString("en-US", { month: "long" });
+    if (!monthSectionsMap.has(key)) {
+      monthSectionsMap.set(key, { key, label, tasks: [] });
+    }
+
+    monthSectionsMap.get(key)?.tasks.push(task);
+  }
+  const monthSections = Array.from(monthSectionsMap.values());
+
+  const renderSectionHeader = (title: string, spacingClassName = "mb-3 mt-2") => (
+    <View className={spacingClassName}>
+      <Text className="font-bold text-body-md text-things-text">{title}</Text>
+      <View
+        className="mt-2 h-px w-full"
+        style={{ backgroundColor: sectionDividerColor }}
+      />
+    </View>
+  );
+
+  const renderTaskRow = (
+    task: LogbookTask,
+    dateLabel: string,
+    dateLabelClassName = "mr-3 font-medium text-footer",
+  ) => (
+    <View
+      key={task.id}
+      className="flex-row items-center py-3"
+    >
+      <View
+        className="mr-3 items-center justify-center"
+        style={{
+          width: SIZE_TOKENS.quickTaskCheckbox,
+          height: SIZE_TOKENS.quickTaskCheckbox,
+          borderRadius: RADIUS_TOKENS.xs,
+          borderWidth: BORDER_WIDTH_TOKENS.subtle,
+          borderColor: completedColor,
+          backgroundColor: completedColor,
+        }}
+      >
+        <Icon name="check" size={10} color={checkedIconColor} />
+      </View>
+      <Text
+        className={dateLabelClassName}
+        style={{ color: completedColor }}
+      >
+        {dateLabel}
+      </Text>
+      <Text className="flex-1 font-regular text-label-sm text-things-text">
+        {task.title}
+      </Text>
+    </View>
+  );
 
   return (
     <View className="flex-1 bg-things-bg">
@@ -208,73 +298,29 @@ export default function LogbookScreen() {
         {tasks.length > 0 ? (
           <View className="mb-20">
             {todayTasks.length > 0 ? (
-              <View className="mb-3 mt-2">
-                <Text className="font-bold text-body-md text-things-text">Today</Text>
-                <View
-                  className="mt-2 h-px w-full"
-                  style={{ backgroundColor: sectionDividerColor }}
-                />
-              </View>
+              renderSectionHeader("Today")
             ) : null}
 
-            {todayTasks.map((task) => (
-              <View
-                key={task.id}
-                className="flex-row items-center py-3"
-              >
-                <View
-                  className="mr-3 items-center justify-center"
-                  style={{
-                    width: SIZE_TOKENS.quickTaskCheckbox,
-                    height: SIZE_TOKENS.quickTaskCheckbox,
-                    borderRadius: RADIUS_TOKENS.xs,
-                    borderWidth: BORDER_WIDTH_TOKENS.subtle,
-                    borderColor: completedColor,
-                    backgroundColor: completedColor,
-                  }}
-                >
-                  <Icon name="check" size={10} color={checkedIconColor} />
-                </View>
-                <Text
-                  className="mr-3 font-medium text-tiny"
-                  style={{ color: completedColor }}
-                >
-                  today
-                </Text>
-                <Text className="flex-1 font-regular text-label-sm text-things-text">
-                  {task.title}
-                </Text>
-              </View>
-            ))}
+            {todayTasks.map((task) => renderTaskRow(task, "today", "mr-3 font-medium text-tiny"))}
 
-            {olderTasks.map((task) => (
-              <View
-                key={task.id}
-                className="flex-row items-center py-3"
-              >
-                <View
-                  className="mr-3 items-center justify-center"
-                  style={{
-                    width: SIZE_TOKENS.quickTaskCheckbox,
-                    height: SIZE_TOKENS.quickTaskCheckbox,
-                    borderRadius: RADIUS_TOKENS.xs,
-                    borderWidth: BORDER_WIDTH_TOKENS.subtle,
-                    borderColor: completedColor,
-                    backgroundColor: completedColor,
-                  }}
-                >
-                  <Icon name="check" size={10} color={checkedIconColor} />
-                </View>
-                <Text
-                  className="mr-3 font-medium text-footer"
-                  style={{ color: completedColor }}
-                >
-                  {formatCompletedDate(task.completedAt)}
-                </Text>
-                <Text className="flex-1 font-regular text-label-sm text-things-text">
-                  {task.title}
-                </Text>
-              </View>
+            {yesterdayTasks.length > 0 ? (
+              renderSectionHeader("Yesterday", todayTasks.length > 0 ? "mb-3 mt-4" : "mb-3 mt-2")
+            ) : null}
+
+            {yesterdayTasks.map((task) =>
+              renderTaskRow(task, formatCompletedDate(task.completedAt)),
+            )}
+
+            {monthSections.map((section) => (
+              <React.Fragment key={section.key}>
+                {renderSectionHeader(
+                  section.label,
+                  todayTasks.length > 0 || yesterdayTasks.length > 0 ? "mb-3 mt-4" : "mb-3 mt-2",
+                )}
+                {section.tasks.map((task) =>
+                  renderTaskRow(task, formatCompletedDate(task.completedAt)),
+                )}
+              </React.Fragment>
             ))}
           </View>
         ) : (

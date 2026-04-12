@@ -87,6 +87,18 @@ function toDateOnlyIso(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeChecklistItems(
+  checklistItems: Array<unknown> | null | undefined,
+) {
+  if (!checklistItems?.length) {
+    return [] as string[];
+  }
+
+  return checklistItems
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item.length > 0);
+}
+
 export async function fetchHomeData(): Promise<HomeData> {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
@@ -172,7 +184,7 @@ export async function fetchInboxTodos() {
   const userId = user.id;
   const result = await supabase
     .from("jobs")
-    .select("id, title, description, client_id")
+    .select("id, title, description, client_id, deadline_date, checklist_items")
     .eq("user_id", userId)
     .is("scheduled_date", null)
     .is("completed_at", null)
@@ -184,7 +196,12 @@ export async function fetchInboxTodos() {
     throw result.error;
   }
 
-  return result.data;
+  return result.data.map((todo) => ({
+    ...todo,
+    checklist_items: normalizeChecklistItems(
+      Array.isArray(todo.checklist_items) ? todo.checklist_items : [],
+    ),
+  }));
 }
 
 export async function fetchTodayTodos() {
@@ -193,7 +210,9 @@ export async function fetchTodayTodos() {
   const todayDate = toDateOnlyIso(new Date());
   const result = await supabase
     .from("jobs")
-    .select("id, title, description, client_id")
+    .select(
+      "id, title, description, client_id, scheduled_date, status, deadline_date, checklist_items",
+    )
     .eq("user_id", userId)
     .eq("scheduled_date", todayDate)
     .is("completed_at", null)
@@ -204,7 +223,39 @@ export async function fetchTodayTodos() {
     throw result.error;
   }
 
-  return result.data;
+  return result.data.map((todo) => ({
+    ...todo,
+    checklist_items: normalizeChecklistItems(
+      Array.isArray(todo.checklist_items) ? todo.checklist_items : [],
+    ),
+  }));
+}
+
+export async function fetchUpcomingTodos() {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const todayDate = toDateOnlyIso(new Date());
+  const result = await supabase
+    .from("jobs")
+    .select("id, title, description, client_id, scheduled_date, deadline_date, checklist_items")
+    .eq("user_id", userId)
+    .gt("scheduled_date", todayDate)
+    .is("completed_at", null)
+    .is("archived_at", null)
+    .or("status.is.null,status.neq.someday")
+    .order("scheduled_date", { ascending: true })
+    .order("created_at", { ascending: false });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  return result.data.map((todo) => ({
+    ...todo,
+    checklist_items: normalizeChecklistItems(
+      Array.isArray(todo.checklist_items) ? todo.checklist_items : [],
+    ),
+  }));
 }
 
 export async function fetchSomedayTodos() {
@@ -212,7 +263,9 @@ export async function fetchSomedayTodos() {
   const userId = user.id;
   const result = await supabase
     .from("jobs")
-    .select("id, title, description, client_id")
+    .select(
+      "id, title, description, client_id, scheduled_date, status, deadline_date, checklist_items",
+    )
     .eq("user_id", userId)
     .eq("status", "someday")
     .is("completed_at", null)
@@ -223,7 +276,12 @@ export async function fetchSomedayTodos() {
     throw result.error;
   }
 
-  return result.data;
+  return result.data.map((todo) => ({
+    ...todo,
+    checklist_items: normalizeChecklistItems(
+      Array.isArray(todo.checklist_items) ? todo.checklist_items : [],
+    ),
+  }));
 }
 
 export async function fetchLogbookTodos() {
@@ -256,7 +314,9 @@ export async function fetchProjectById(clientId: string) {
       .single(),
     supabase
       .from("jobs")
-      .select("id, title, description, status, scheduled_date, price, completed_at, archived_at")
+      .select(
+        "id, title, description, status, scheduled_date, deadline_date, checklist_items, price, completed_at, archived_at",
+      )
       .eq("client_id", clientId)
       .eq("user_id", userId)
       .order("created_at", { ascending: false }),
@@ -272,7 +332,12 @@ export async function fetchProjectById(clientId: string) {
 
   return {
     project: normalizeProjectRow(projectResult.data as LegacyProjectRow),
-    todos: jobsResult.data,
+    todos: jobsResult.data.map((todo) => ({
+      ...todo,
+      checklist_items: normalizeChecklistItems(
+        Array.isArray(todo.checklist_items) ? todo.checklist_items : [],
+      ),
+    })),
   };
 }
 
@@ -281,6 +346,8 @@ export async function createTodo(input: {
   notes?: string;
   projectId?: string | null;
   scheduledDate?: Date | null;
+  deadlineDate?: Date | null;
+  checklistItems?: string[];
   status?: "new" | "someday";
 }) {
   const { supabase, user } = await requireCurrentUser();
@@ -292,19 +359,28 @@ export async function createTodo(input: {
     .insert({
       title: input.title,
       description: input.notes?.trim() || null,
+      deadline_date: input.deadlineDate ? toDateOnlyIso(input.deadlineDate) : null,
+      checklist_items: normalizeChecklistItems(input.checklistItems),
       client_id: input.projectId ?? null,
       status: normalizedStatus,
       scheduled_date: input.scheduledDate ? toDateOnlyIso(input.scheduledDate) : null,
       user_id: userId,
     })
-    .select("id, title, description, client_id, status, scheduled_date, created_at")
+    .select(
+      "id, title, description, client_id, status, scheduled_date, deadline_date, checklist_items, created_at",
+    )
     .single();
 
   if (result.error) {
     throw new Error(`Nisam uspeo da sacuvam zadatak: ${result.error.message}`);
   }
 
-  return result.data;
+  return {
+    ...result.data,
+    checklist_items: normalizeChecklistItems(
+      Array.isArray(result.data.checklist_items) ? result.data.checklist_items : [],
+    ),
+  };
 }
 
 export async function createProject(title: string) {
@@ -348,6 +424,55 @@ export async function completeInboxTodo(jobId: string) {
       status: "completed",
       completed_at: new Date().toISOString(),
     })
+    .eq("id", jobId)
+    .eq("user_id", userId);
+
+  if (result.error) {
+    throw result.error;
+  }
+}
+
+export async function updateInboxTodo(
+  jobId: string,
+  input: {
+    title: string;
+    description?: string | null;
+    scheduledDateIso?: string | null;
+    deadlineDateIso?: string | null;
+    checklistItems?: string[] | null;
+    status?: "new" | "someday" | null;
+  },
+) {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const updatePayload: Database["public"]["Tables"]["jobs"]["Update"] = {
+    title: input.title.trim(),
+  };
+
+  if (input.description !== undefined) {
+    updatePayload.description = input.description?.trim() || null;
+  }
+
+  if (input.scheduledDateIso !== undefined) {
+    updatePayload.scheduled_date = input.scheduledDateIso;
+  }
+
+  if (input.deadlineDateIso !== undefined) {
+    updatePayload.deadline_date = input.deadlineDateIso;
+  }
+
+  if (input.checklistItems !== undefined) {
+    updatePayload.checklist_items = normalizeChecklistItems(input.checklistItems);
+  }
+
+  if (input.status !== undefined) {
+    updatePayload.status =
+      input.status === "someday" ? "someday" : null;
+  }
+
+  const result = await supabase
+    .from("jobs")
+    .update(updatePayload)
     .eq("id", jobId)
     .eq("user_id", userId);
 

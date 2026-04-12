@@ -229,9 +229,11 @@ export interface Database {
       jobs: {
         Row: {
           archived_at: string | null;
+          checklist_items: Json;
           client_id: string | null;
           completed_at: string | null;
           created_at: string | null;
+          deadline_date: string | null;
           description: string | null;
           id: string;
           price: number | null;
@@ -242,9 +244,11 @@ export interface Database {
         };
         Insert: {
           archived_at?: string | null;
+          checklist_items?: Json;
           client_id?: string | null;
           completed_at?: string | null;
           created_at?: string | null;
+          deadline_date?: string | null;
           description?: string | null;
           id?: string;
           price?: number | null;
@@ -255,9 +259,11 @@ export interface Database {
         };
         Update: {
           archived_at?: string | null;
+          checklist_items?: Json;
           client_id?: string | null;
           completed_at?: string | null;
           created_at?: string | null;
+          deadline_date?: string | null;
           description?: string | null;
           id?: string;
           price?: number | null;

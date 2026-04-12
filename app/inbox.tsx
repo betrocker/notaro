@@ -1,37 +1,34 @@
 import { Icon } from "@/components/Icon";
+import InlineTodoAccordion from "@/components/InlineTodoAccordion";
 import ProjectHeader from "@/components/ProjectHeader";
 import { AppText as Text } from "@/components/ui";
+import { COLOR_TOKENS, SIZE_TOKENS } from "@/lib/design-system/tokens";
 import {
-  BORDER_WIDTH_TOKENS,
-  COLOR_TOKENS,
-  RADIUS_TOKENS,
-  SIZE_TOKENS,
-} from "@/lib/design-system/tokens";
-import { completeInboxTodo, fetchInboxTodos } from "@/lib/repository";
+  completeInboxTodo,
+  fetchInboxTodos,
+  updateInboxTodo,
+} from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { useFocusEffect } from "@react-navigation/native";
-import { router, Stack } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { TouchableOpacity, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { Pressable, View } from "react-native";
 import Animated, {
   Extrapolation,
   interpolate,
-  runOnJS,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
-  withDelay,
-  withTiming,
 } from "react-native-reanimated";
 
 type QuickTask = {
   id: string;
   title: string;
+  description: string | null;
+  deadlineDateIso?: string | null;
+  checklistItems?: string[];
 };
-
-const CHECKED_HOLD_DURATION_MS = 2300;
-const CHECKED_FADE_OUT_DURATION_MS = 320;
 
 function withOpacity(hexColor: string, opacity: number) {
   const sanitized = hexColor.replace("#", "");
@@ -50,83 +47,8 @@ function withOpacity(hexColor: string, opacity: number) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
-function QuickTaskRow({
-  task,
-  checkboxSize,
-  checkboxBorderColor,
-  checkedColor,
-  checkedIconColor,
-  isChecked,
-  isFading,
-  isBusy,
-  onCheckPress,
-  onFadeComplete,
-}: {
-  task: QuickTask;
-  checkboxSize: number;
-  checkboxBorderColor: string;
-  checkedColor: string;
-  checkedIconColor: string;
-  isChecked: boolean;
-  isFading: boolean;
-  isBusy: boolean;
-  onCheckPress: (taskId: string) => void;
-  onFadeComplete: (taskId: string) => void;
-}) {
-  const rowOpacity = useSharedValue(1);
-  const hasFadeStartedRef = useRef(false);
-
-  useEffect(() => {
-    if (!isFading || hasFadeStartedRef.current) {
-      return;
-    }
-
-    hasFadeStartedRef.current = true;
-    rowOpacity.value = withDelay(
-      CHECKED_HOLD_DURATION_MS,
-      withTiming(0, { duration: CHECKED_FADE_OUT_DURATION_MS }, (finished) => {
-        if (finished) {
-          runOnJS(onFadeComplete)(task.id);
-        }
-      }),
-    );
-  }, [isFading, onFadeComplete, rowOpacity, task.id]);
-
-  const rowAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: rowOpacity.value,
-  }));
-
-  return (
-    <Animated.View
-      className="flex-row items-center py-3"
-      style={rowAnimatedStyle}
-    >
-      <TouchableOpacity
-        className="mr-3 items-center justify-center"
-        activeOpacity={0.72}
-        onPress={() => onCheckPress(task.id)}
-        disabled={isBusy}
-        style={{
-          width: checkboxSize,
-          height: checkboxSize,
-          borderRadius: RADIUS_TOKENS.xs,
-          borderWidth: BORDER_WIDTH_TOKENS.subtle,
-          borderColor: isChecked ? checkedColor : checkboxBorderColor,
-          backgroundColor: isChecked ? checkedColor : "transparent",
-        }}
-      >
-        {isChecked ? (
-          <Icon name="check" size={10} color={checkedIconColor} />
-        ) : null}
-      </TouchableOpacity>
-      <Text className="flex-1 font-regular text-label-sm text-things-text">
-        {task.title}
-      </Text>
-    </Animated.View>
-  );
-}
-
 export default function QuickTasksScreen() {
+  const { refresh } = useLocalSearchParams<{ refresh?: string }>();
   const { colorScheme } = useColorScheme();
   const colorMode = colorScheme === "dark" ? "dark" : "light";
   const [tasks, setTasks] = useState<QuickTask[]>([]);
@@ -134,6 +56,7 @@ export default function QuickTasksScreen() {
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [fadingIds, setFadingIds] = useState<Set<string>>(new Set());
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const scrollY = useSharedValue(0);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const checkboxBorderColor = withOpacity(
@@ -158,8 +81,12 @@ export default function QuickTasksScreen() {
         data.map((task) => ({
           id: task.id,
           title: task.title ?? "Bez naslova",
+          description: task.description ?? null,
+          deadlineDateIso: task.deadline_date ?? null,
+          checklistItems: task.checklist_items ?? [],
         })),
       );
+      setExpandedTaskId(null);
       setCheckingIds(new Set());
       setCheckedIds(new Set());
       setFadingIds(new Set());
@@ -177,6 +104,14 @@ export default function QuickTasksScreen() {
       void loadQuickTasks();
     }, [loadQuickTasks]),
   );
+
+  useEffect(() => {
+    if (!refresh) {
+      return;
+    }
+
+    void loadQuickTasks();
+  }, [loadQuickTasks, refresh]);
 
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -247,6 +182,10 @@ export default function QuickTasksScreen() {
       return;
     }
 
+    if (expandedTaskId === taskId) {
+      setExpandedTaskId(null);
+    }
+
     setCheckedIds((current) => {
       const next = new Set(current);
       next.add(taskId);
@@ -277,10 +216,13 @@ export default function QuickTasksScreen() {
         return next;
       });
     }
-  }, []);
+  }, [expandedTaskId]);
 
   const handleFadeComplete = useCallback((taskId: string) => {
     setTasks((current) => current.filter((task) => task.id !== taskId));
+    if (expandedTaskId === taskId) {
+      setExpandedTaskId(null);
+    }
     setCheckedIds((current) => {
       const next = new Set(current);
       next.delete(taskId);
@@ -291,7 +233,55 @@ export default function QuickTasksScreen() {
       next.delete(taskId);
       return next;
     });
-  }, []);
+  }, [expandedTaskId]);
+
+  const handleSaveTask = useCallback(
+    async (
+      taskId: string,
+      payload: {
+        title: string;
+        description: string;
+        scheduledDateIso?: string | null;
+        deadlineDateIso?: string | null;
+        checklistItems?: string[];
+        status?: "new" | "someday" | null;
+      },
+    ) => {
+      await updateInboxTodo(taskId, {
+        title: payload.title,
+        description: payload.description,
+        scheduledDateIso: payload.scheduledDateIso,
+        deadlineDateIso: payload.deadlineDateIso,
+        checklistItems: payload.checklistItems,
+        status: payload.status,
+      });
+
+      const shouldLeaveInbox =
+        payload.status === "someday" ||
+        (payload.scheduledDateIso !== undefined && payload.scheduledDateIso !== null);
+
+      if (shouldLeaveInbox) {
+        setExpandedTaskId((current) => (current === taskId ? null : current));
+        setTasks((current) => current.filter((task) => task.id !== taskId));
+        return;
+      }
+
+      setTasks((current) =>
+        current.map((task) =>
+          task.id === taskId
+            ? {
+                ...task,
+                title: payload.title,
+                description: payload.description || null,
+                deadlineDateIso: payload.deadlineDateIso ?? null,
+                checklistItems: payload.checklistItems ?? [],
+              }
+            : task,
+        ),
+      );
+    },
+    [],
+  );
 
   return (
     <View className="flex-1 bg-things-bg">
@@ -307,49 +297,56 @@ export default function QuickTasksScreen() {
         className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
+        keyboardShouldPersistTaps="handled"
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 32, flexGrow: 1 }}
       >
-        <Animated.View
-          className="mb-6 flex-row items-center"
-          style={heroTitleAnimatedStyle}
-        >
-          <Icon name="inbox" size={22} color="var(--color-inbox)" />
-          <Text className="ml-2.5 font-bold text-things-text text-things-title-large">
-            Quick Tasks
-          </Text>
-        </Animated.View>
+        <Pressable className="flex-1" onPress={() => setExpandedTaskId(null)}>
+          <Animated.View
+            className="mb-6 flex-row items-center"
+            style={heroTitleAnimatedStyle}
+          >
+            <Icon name="inbox" size={22} color="var(--color-inbox)" />
+            <Text className="ml-2.5 font-bold text-things-text text-things-title-large">
+              Quick Tasks
+            </Text>
+          </Animated.View>
 
-        {errorMessage ? (
-          <Text className="mb-4 font-regular text-label-sm leading-5 text-things-muted">
-            {errorMessage}
-          </Text>
-        ) : null}
+          {errorMessage ? (
+            <Text className="mb-4 font-regular text-label-sm leading-5 text-things-muted">
+              {errorMessage}
+            </Text>
+          ) : null}
 
-        {tasks.length > 0 ? (
-          <View className="mb-20">
-            {tasks.map((task) => (
-              <QuickTaskRow
-                key={task.id}
-                task={task}
-                checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
-                checkboxBorderColor={checkboxBorderColor}
-                checkedColor={checkedColor}
-                checkedIconColor={checkedIconColor}
-                isChecked={checkedIds.has(task.id)}
-                isFading={fadingIds.has(task.id)}
-                isBusy={checkingIds.has(task.id)}
-                onCheckPress={(taskId) => void handleCompleteTask(taskId)}
-                onFadeComplete={handleFadeComplete}
-              />
-            ))}
-          </View>
-        ) : (
-          <View className="flex-1 items-center justify-center">
-            <Icon name="inbox" size={96} color={emptyIconColor} />
-          </View>
-        )}
+          {tasks.length > 0 ? (
+            <View className="mb-20">
+              {tasks.map((task) => (
+                <InlineTodoAccordion
+                  key={task.id}
+                  task={task}
+                  checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                  checkboxBorderColor={checkboxBorderColor}
+                  checkedColor={checkedColor}
+                  checkedIconColor={checkedIconColor}
+                  isChecked={checkedIds.has(task.id)}
+                  isFading={fadingIds.has(task.id)}
+                  isBusy={checkingIds.has(task.id)}
+                  isExpanded={expandedTaskId === task.id}
+                  onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                  onToggleExpanded={(taskId) =>
+                    setExpandedTaskId((current) => (current === taskId ? null : taskId))
+                  }
+                  onFadeComplete={handleFadeComplete}
+                  onSave={handleSaveTask}
+                />
+              ))}
+            </View>
+          ) : (
+            <View className="flex-1 items-center justify-center">
+              <Icon name="inbox" size={96} color={emptyIconColor} />
+            </View>
+          )}
+        </Pressable>
       </Animated.ScrollView>
-
     </View>
   );
 }

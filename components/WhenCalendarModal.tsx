@@ -11,6 +11,7 @@ import {
   Easing,
   FlatList,
   LayoutChangeEvent,
+  Modal,
   Platform,
   StyleSheet,
   TouchableOpacity,
@@ -787,150 +788,169 @@ export default function WhenCalendarModal({
   }, [onClearSelection, onClose]);
 
   return (
-    <View
-      pointerEvents={visible ? "auto" : "none"}
-      style={StyleSheet.absoluteFill}
+    <Modal
+      visible={visible}
+      transparent
+      animationType="none"
+      statusBarTranslucent
+      presentationStyle="overFullScreen"
+      onRequestClose={onClose}
     >
-      <TransparentModalShell
-        visible={visible}
-        contentStyle={[
-          styles.modalWindow,
-          styles.modalWindowShadow,
-          {
-            borderColor,
-            backgroundColor: modalBg,
-          },
-        ]}
-        overlayStyle={styles.overlay}
-        backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
-        backdropOpacity={isDark ? 0.64 : 0.4}
-      >
-        <View style={styles.header}>
-          {page === "detail" && !isDeadlineMode ? (
-            <View style={styles.headerLeftButton}>
-              <ModalCircleButton
-                icon="chevronLeft"
-                theme={theme}
-                onPress={closeDetailPage}
-              />
-            </View>
-          ) : null}
-          <Text
-            variant="bodyLg"
-            style={[styles.headerTitle, { color: headerTitleColor }]}
-          >
-            {isDeadlineMode ? "Deadline" : "When?"}
-          </Text>
-          <View style={styles.headerRightButton}>
-            <ModalCircleButton icon="close" theme={theme} onPress={onClose} />
-          </View>
-        </View>
-
-        <View style={styles.pagesViewport} onLayout={onPageViewportLayout}>
-          {pageWidth > 0 && !isDeadlineMode ? (
-            <Animated.View
-              style={[
-                styles.pagesTrack,
-                {
-                  width: pageWidth * 2,
-                  transform: [{ translateX: pageTranslateX as never }],
-                },
-              ]}
+      <View style={StyleSheet.absoluteFill}>
+        <TransparentModalShell
+          visible
+          contentStyle={[
+            styles.modalWindow,
+            styles.modalWindowShadow,
+            {
+              borderColor,
+              backgroundColor: modalBg,
+            },
+          ]}
+          overlayStyle={styles.overlay}
+          backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
+          backdropOpacity={isDark ? 0.64 : 0.4}
+        >
+          <View style={styles.header}>
+            {page === "detail" && !isDeadlineMode ? (
+              <View style={styles.headerLeftButton}>
+                <ModalCircleButton
+                  icon="chevronLeft"
+                  theme={theme}
+                  onPress={closeDetailPage}
+                />
+              </View>
+            ) : null}
+            <Text
+              variant="bodyLg"
+              style={[styles.headerTitle, { color: headerTitleColor }]}
             >
-              <View style={[styles.quickPage, { width: pageWidth }]}>
-                <TouchableOpacity
-                  activeOpacity={0.78}
-                  style={styles.todayRow}
-                  onPress={handleSelectToday}
-                >
-                  <View style={styles.rowLabelContent}>
-                    <Icon
-                      name="today"
-                      size={TODAY_ROW_STAR_SIZE}
-                      color="var(--color-today)"
-                      weight="light"
-                    />
-                    <Text
-                      className="ml-2 font-semibold"
-                      variant="labelSm"
-                      style={{ color: primaryText }}
-                    >
-                      Today
-                    </Text>
-                  </View>
-                  {isTodaySelected ? (
-                    <Icon
-                      name="check"
-                      size={18}
-                      color={selectionAccentColor}
-                      weight="medium"
-                    />
-                  ) : null}
-                </TouchableOpacity>
+              {isDeadlineMode ? "Deadline" : "When?"}
+            </Text>
+            <View style={styles.headerRightButton}>
+              <ModalCircleButton icon="close" theme={theme} onPress={onClose} />
+            </View>
+          </View>
+          <View style={styles.pagesViewport} onLayout={onPageViewportLayout}>
+            {pageWidth > 0 && !isDeadlineMode ? (
+              <Animated.View
+                style={[
+                  styles.pagesTrack,
+                  {
+                    width: pageWidth * 2,
+                    transform: [{ translateX: pageTranslateX as never }],
+                  },
+                ]}
+              >
+                <View style={[styles.quickPage, { width: pageWidth }]}>
+                  <TouchableOpacity
+                    activeOpacity={0.78}
+                    style={styles.todayRow}
+                    onPress={handleSelectToday}
+                  >
+                    <View style={styles.rowLabelContent}>
+                      <Icon
+                        name="today"
+                        size={TODAY_ROW_STAR_SIZE}
+                        color="var(--color-today)"
+                        weight="light"
+                      />
+                      <Text
+                        className="ml-2 font-semibold"
+                        variant="labelSm"
+                        style={{ color: primaryText }}
+                      >
+                        Today
+                      </Text>
+                    </View>
+                    {isTodaySelected ? (
+                      <Icon
+                        name="check"
+                        size={18}
+                        color={selectionAccentColor}
+                        weight="medium"
+                      />
+                    ) : null}
+                  </TouchableOpacity>
 
-                <View style={styles.quickCalendarWrap}>
-                  <MonthGrid
-                    monthStart={minimumMonthStart}
-                    minimumMonthStart={minimumMonthStart}
+                  <View style={styles.quickCalendarWrap}>
+                    <MonthGrid
+                      monthStart={minimumMonthStart}
+                      minimumMonthStart={minimumMonthStart}
+                      today={today}
+                      primaryText={primaryText}
+                      secondaryText={secondaryText}
+                      selectedDateKey={selectedDateKey}
+                      selectionAccentColor={selectionAccentColor}
+                      showTrailingChevron
+                      onPressTrailingChevron={openDetailPage}
+                      onSelectDate={handleSelectDate}
+                    />
+                  </View>
+
+                  <TouchableOpacity
+                    activeOpacity={0.78}
+                    style={styles.somedayRow}
+                    onPress={() => {
+                      onSelectSomeday?.();
+                      onClose();
+                    }}
+                  >
+                    <View style={styles.rowLabelContent}>
+                      <Icon
+                        name="someday"
+                        size={TODAY_ROW_STAR_SIZE}
+                        color="var(--color-someday)"
+                        weight="light"
+                      />
+                      <Text
+                        className="ml-2 font-semibold"
+                        variant="labelSm"
+                        style={{ color: primaryText }}
+                      >
+                        Someday
+                      </Text>
+                    </View>
+                    {isSomedaySelected ? (
+                      <Icon
+                        name="check"
+                        size={18}
+                        color={selectionAccentColor}
+                        weight="medium"
+                      />
+                    ) : null}
+                  </TouchableOpacity>
+
+                  {canClearSelection ? (
+                    <View style={styles.quickPageFooter}>
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={styles.clearButton}
+                        onPress={handleClearSelection}
+                      >
+                        <Text variant="labelSm" style={styles.clearButtonText}>
+                          Clear
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={{ width: pageWidth, flex: 1 }}>
+                  <DetailWeeksGrid
+                    weeks={detailWeeks}
                     today={today}
+                    borderColor={borderColor}
                     primaryText={primaryText}
                     secondaryText={secondaryText}
                     selectedDateKey={selectedDateKey}
                     selectionAccentColor={selectionAccentColor}
-                    showTrailingChevron
-                    onPressTrailingChevron={openDetailPage}
                     onSelectDate={handleSelectDate}
+                    listVersion={detailListVersion}
                   />
                 </View>
-
-                <TouchableOpacity
-                  activeOpacity={0.78}
-                  style={styles.somedayRow}
-                  onPress={() => {
-                    onSelectSomeday?.();
-                    onClose();
-                  }}
-                >
-                  <View style={styles.rowLabelContent}>
-                    <Icon
-                      name="someday"
-                      size={TODAY_ROW_STAR_SIZE}
-                      color="var(--color-someday)"
-                      weight="light"
-                    />
-                    <Text
-                      className="ml-2 font-semibold"
-                      variant="labelSm"
-                      style={{ color: primaryText }}
-                    >
-                      Someday
-                    </Text>
-                  </View>
-                  {isSomedaySelected ? (
-                    <Icon
-                      name="check"
-                      size={18}
-                      color={selectionAccentColor}
-                      weight="medium"
-                    />
-                  ) : null}
-                </TouchableOpacity>
-
-                {canClearSelection ? (
-                  <View style={styles.quickPageFooter}>
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      style={styles.clearButton}
-                      onPress={handleClearSelection}
-                    >
-                      <Text variant="labelSm" style={styles.clearButtonText}>
-                        Clear
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
-              </View>
-
+              </Animated.View>
+            ) : pageWidth > 0 ? (
               <View style={{ width: pageWidth, flex: 1 }}>
                 <DetailWeeksGrid
                   weeks={detailWeeks}
@@ -943,40 +963,26 @@ export default function WhenCalendarModal({
                   onSelectDate={handleSelectDate}
                   listVersion={detailListVersion}
                 />
-              </View>
-            </Animated.View>
-          ) : pageWidth > 0 ? (
-            <View style={{ width: pageWidth, flex: 1 }}>
-              <DetailWeeksGrid
-                weeks={detailWeeks}
-                today={today}
-                borderColor={borderColor}
-                primaryText={primaryText}
-                secondaryText={secondaryText}
-                selectedDateKey={selectedDateKey}
-                selectionAccentColor={selectionAccentColor}
-                onSelectDate={handleSelectDate}
-                listVersion={detailListVersion}
-              />
 
-              {canClearDeadlineSelection ? (
-                <View pointerEvents="box-none" style={styles.deadlineClearOverlay}>
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    style={styles.clearButton}
-                    onPress={handleClearSelection}
-                  >
-                    <Text variant="labelSm" style={styles.clearButtonText}>
-                      Clear
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-      </TransparentModalShell>
-    </View>
+                {canClearDeadlineSelection ? (
+                  <View pointerEvents="box-none" style={styles.deadlineClearOverlay}>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={styles.clearButton}
+                      onPress={handleClearSelection}
+                    >
+                      <Text variant="labelSm" style={styles.clearButtonText}>
+                        Clear
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
+        </TransparentModalShell>
+      </View>
+    </Modal>
   );
 }
 
