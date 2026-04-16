@@ -141,7 +141,7 @@ export default function NewTodoScreen() {
     string | null
   >(null);
   const [editingChecklistText, setEditingChecklistText] = useState("");
-  const [selectedTagLabel] = useState<string | null>(null);
+  const [selectedClientLabel] = useState<string | null>(null);
   const [isWhenModalOpen, setIsWhenModalOpen] = useState(false);
   const [deadlineDate, setDeadlineDate] = useState<Date | null>(null);
   const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
@@ -343,6 +343,9 @@ export default function NewTodoScreen() {
     Keyboard.dismiss();
     setIsChecklistSurfaceActive(false);
     action?.();
+  };
+  const openClientsModal = () => {
+    handleToolbarIconPress(() => router.push("/clients"));
   };
 
   const handleChecklistInputFocus = () => {
@@ -749,8 +752,8 @@ export default function NewTodoScreen() {
         daysLeft: formatDaysUntilLabel(deadlineDate),
       }
     : null;
-  const selectedTagDisplay = selectedTagLabel
-    ? { label: selectedTagLabel }
+  const selectedClientDisplay = selectedClientLabel
+    ? { label: selectedClientLabel }
     : null;
   const visibleChecklistItems = checklistItems;
   const shouldRenderChecklist =
@@ -1172,14 +1175,14 @@ export default function NewTodoScreen() {
 
                 <View className={metadataRowClassName}>
                   <View className={metadataDetailsClassName}>
-                    {selectedTagDisplay ? (
+                    {selectedClientDisplay ? (
                       <TouchableOpacity
                         activeOpacity={0.72}
                         className="min-w-0 flex-row items-center"
-                        onPress={() => handleToolbarIconPress()}
+                        onPress={openClientsModal}
                       >
                         <Icon
-                          name="tag"
+                          name="client"
                           size={16}
                           color={secondaryTextColor}
                           weight="light"
@@ -1191,7 +1194,7 @@ export default function NewTodoScreen() {
                           numberOfLines={1}
                           ellipsizeMode="tail"
                         >
-                          {selectedTagDisplay.label}
+                          {selectedClientDisplay.label}
                         </Text>
                       </TouchableOpacity>
                     ) : null}
@@ -1280,10 +1283,10 @@ export default function NewTodoScreen() {
                     <TouchableOpacity
                       className="ml-2 h-8 w-8 items-center justify-center"
                       activeOpacity={0.72}
-                      onPress={() => handleToolbarIconPress()}
+                      onPress={openClientsModal}
                     >
                       <Icon
-                        name="tag"
+                        name="client"
                         size={18}
                         color={secondaryTextColor}
                         weight="light"

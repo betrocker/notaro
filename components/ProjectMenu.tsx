@@ -19,6 +19,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Icon } from "./Icon";
+import type { IconName } from "./Icon";
 
 interface ProjectMenuProps {
   onClose: () => void;
@@ -26,9 +27,76 @@ interface ProjectMenuProps {
     x: number;
     y: number;
   } | null;
+  actions?: ProjectMenuAction[];
 }
 
-export default function ProjectMenu({ onClose, anchor = null }: ProjectMenuProps) {
+export type ProjectMenuAction = {
+  key: string;
+  label: string;
+  icon: IconName;
+  onPress: () => void;
+  destructive?: boolean;
+  showSeparatorAbove?: boolean;
+};
+
+const DEFAULT_ACTIONS: ProjectMenuAction[] = [
+  {
+    key: "complete-project",
+    label: "Complete Project",
+    icon: "checkCircle",
+    onPress: () => {
+      console.log("Complete Project");
+    },
+  },
+  {
+    key: "when",
+    label: "When",
+    icon: "upcoming",
+    onPress: () => {
+      console.log("When");
+    },
+  },
+  {
+    key: "add-tags",
+    label: "Add Tags",
+    icon: "tag",
+    onPress: () => {
+      console.log("Add Tags");
+    },
+  },
+  {
+    key: "add-deadline",
+    label: "Add Deadline",
+    icon: "upcoming",
+    onPress: () => {
+      console.log("Add Deadline");
+    },
+  },
+  {
+    key: "share",
+    label: "Share",
+    icon: "share",
+    onPress: () => {
+      console.log("Share");
+    },
+    showSeparatorAbove: true,
+  },
+  {
+    key: "delete-project",
+    label: "Delete Project",
+    icon: "trash",
+    onPress: () => {
+      console.log("Delete Project");
+    },
+    destructive: true,
+  },
+];
+
+export default function ProjectMenu({
+  onClose,
+  anchor = null,
+  actions,
+}: ProjectMenuProps) {
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
   const colorMode = isDark ? "dark" : "light";
@@ -46,6 +114,7 @@ export default function ProjectMenu({ onClose, anchor = null }: ProjectMenuProps
   const anchorY = anchor?.y ?? fallbackTop;
   const menuRight = 16;
   const menuTop = Math.max(insets.top + 8, anchorY + 12);
+  const resolvedActions = actions && actions.length > 0 ? actions : DEFAULT_ACTIONS;
 
   return (
     <Animated.View
@@ -82,116 +151,43 @@ export default function ProjectMenu({ onClose, anchor = null }: ProjectMenuProps
             borderColor,
           } as any,
         ]}
-      >
-        <BlurView
-          intensity={isDark ? 50 : 70}
-          tint={isDark ? "dark" : "light"}
-          style={{ backgroundColor: "transparent" }}
         >
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("Complete Project");
-              onClose();
-            }}
+          <BlurView
+            intensity={isDark ? 50 : 70}
+            tint={isDark ? "dark" : "light"}
+            style={{ backgroundColor: "transparent" }}
           >
-            <Icon name="checkCircle" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: itemTextColor }}
-            >
-              Complete Project
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("When");
-              onClose();
-            }}
-          >
-            <Icon name="upcoming" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: itemTextColor }}
-            >
-              When
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("Add Tags");
-              onClose();
-            }}
-          >
-            <Icon name="tag" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: itemTextColor }}
-            >
-              Add Tags
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("Add Deadline");
-              onClose();
-            }}
-          >
-            <Icon name="upcoming" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: itemTextColor }}
-            >
-              Add Deadline
-            </Text>
-          </TouchableOpacity>
-
-          <View
-            className="mx-4 my-1 h-px"
-            style={{
-              backgroundColor: borderColor,
-              opacity: 0.8,
-            }}
-          />
-
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("Share");
-              onClose();
-            }}
-          >
-            <Icon name="share" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: itemTextColor }}
-            >
-              Share
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            className="flex-row items-center px-4 py-3"
-            onPress={() => {
-              console.log("Delete Project");
-              onClose();
-            }}
-          >
-            <Icon name="trash" size={20} color={menuIconColor} />
-            <Text
-              className="ml-3 font-regular text-label-sm"
-              style={{ color: color["text.secondary"] }}
-            >
-              Delete Project
-            </Text>
-          </TouchableOpacity>
-        </BlurView>
+            {resolvedActions.map((item) => (
+              <React.Fragment key={item.key}>
+                {item.showSeparatorAbove ? (
+                  <View
+                    className="mx-4 my-1 h-px"
+                    style={{
+                      backgroundColor: borderColor,
+                      opacity: 0.8,
+                    }}
+                  />
+                ) : null}
+                <TouchableOpacity
+                  className="flex-row items-center px-4 py-3"
+                  onPress={() => {
+                    item.onPress();
+                    onClose();
+                  }}
+                >
+                  <Icon name={item.icon} size={20} color={menuIconColor} />
+                  <Text
+                    className="ml-3 font-regular text-label-sm"
+                    style={{
+                      color: item.destructive ? color["text.secondary"] : itemTextColor,
+                    }}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              </React.Fragment>
+            ))}
+          </BlurView>
       </Animated.View>
     </Animated.View>
   );

@@ -12,11 +12,16 @@ import * as SystemUI from "expo-system-ui";
 import { useColorScheme } from "nativewind";
 import { useEffect, useState } from "react";
 import { Platform, Text, TextInput, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "@/components/AuthProvider";
+import ActionTabBar, {
+  resolveActionTabFromSegment,
+} from "@/components/ActionTabBar";
 import MagicMenu from "@/components/MagicMenu";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
+import { triggerJobsInlineComposer } from "@/lib/jobsInlineComposer";
 import {
   DEFAULT_TEXT_MAX_MULTIPLIER,
   DEFAULT_TEXT_STYLE,
@@ -127,14 +132,16 @@ export default function RootLayout() {
   }
 
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <RootNavigator
-          stackAnimation={stackAnimation}
-          stackBackgroundColor={stackBackgroundColor}
-        />
-      </AuthProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <RootNavigator
+            stackAnimation={stackAnimation}
+            stackBackgroundColor={stackBackgroundColor}
+          />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
@@ -157,7 +164,12 @@ function RootNavigator({
   const inAuth = rootSegment === "auth";
   const onWelcome = rootSegment === "welcome";
   const inSettings = rootSegment === "settings";
+  const inClients = rootSegment === "clients";
   const inNewTodo = rootSegment === "new-todo";
+  const inModalSurface = inSettings || inClients || inNewTodo;
+  const showActionTabBar =
+    !!session && !inAuth && !onWelcome && !inModalSurface;
+  const activeTab = resolveActionTabFromSegment(rootSegment);
 
   if (!session) {
     if (
@@ -181,8 +193,7 @@ function RootNavigator({
     }
   }
 
-  const showGlobalMagicMenu =
-    !!session && !inAuth && !onWelcome && !inSettings && !inNewTodo;
+  const showGlobalMagicMenu = showActionTabBar;
 
   return (
     <View style={{ flex: 1 }}>
@@ -210,6 +221,8 @@ function RootNavigator({
           }}
         />
         <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="jobs" options={{ headerShown: false }} />
+        <Stack.Screen name="clients-home" options={{ headerShown: false }} />
         <Stack.Screen name="today" options={{ headerShown: false }} />
         <Stack.Screen name="inbox" options={{ headerShown: false }} />
         <Stack.Screen name="upcoming" options={{ headerShown: false }} />
@@ -224,7 +237,23 @@ function RootNavigator({
           }}
         />
         <Stack.Screen
+          name="job/[id]"
+          options={{
+            headerShown: false,
+            animation: stackAnimation,
+          }}
+        />
+        <Stack.Screen
           name="settings"
+          options={{
+            presentation: "transparentModal",
+            animation: "fade",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+        <Stack.Screen
+          name="clients"
           options={{
             presentation: "transparentModal",
             animation: "fade",
@@ -246,6 +275,11 @@ function RootNavigator({
       {showGlobalMagicMenu ? (
         <MagicMenu
           onNewTask={() => router.push("/new-todo")}
+          onPrimaryActionPress={
+            rootSegment === "jobs"
+              ? triggerJobsInlineComposer
+              : undefined
+          }
           onNewProject={() =>
             router.push({
               pathname: "/",
@@ -253,8 +287,11 @@ function RootNavigator({
             })
           }
           onNewClient={() => console.log("New Client is not implemented yet")}
+          bottomOffset={74}
         />
       ) : null}
+
+      {showActionTabBar ? <ActionTabBar activeTab={activeTab} /> : null}
     </View>
   );
 }

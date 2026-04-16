@@ -9,6 +9,14 @@ const ICON_MAP = {
     ios: "tray.fill",
     android: "inbox",
   },
+  home: {
+    ios: "house.fill",
+    android: "home-variant-outline",
+  },
+  briefcase: {
+    ios: "briefcase.fill",
+    android: "briefcase-outline",
+  },
   today: {
     ios: "star.fill",
     android: "star",
@@ -113,6 +121,10 @@ const ICON_MAP = {
     ios: "tag",
     android: "tag",
   },
+  client: {
+    ios: "person.2",
+    android: "account-group-outline",
+  },
   ellipsis: {
     ios: "ellipsis.circle",
     android: "dots-horizontal-circle-outline",
@@ -132,6 +144,10 @@ const ICON_MAP = {
   duplicate: {
     ios: "plus.square.on.square",
     android: "content-copy",
+  },
+  edit: {
+    ios: "pencil",
+    android: "pencil-outline",
   },
   trash: {
     ios: "trash",

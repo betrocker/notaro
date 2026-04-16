@@ -29,6 +29,8 @@ interface ThingsMagicMenuProps {
   onNewTask: () => void;
   onNewProject: () => void;
   onNewClient: () => void;
+  bottomOffset?: number;
+  onPrimaryActionPress?: () => void;
 }
 
 const ACTIONS = [
@@ -76,7 +78,10 @@ export default function MagicMenu({
   onNewTask,
   onNewProject,
   onNewClient,
+  bottomOffset = 0,
+  onPrimaryActionPress,
 }: ThingsMagicMenuProps) {
+  const hasDirectPrimaryAction = typeof onPrimaryActionPress === "function";
   const [isOpen, setIsOpen] = useState(false);
   const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
@@ -93,7 +98,7 @@ export default function MagicMenu({
   const secondaryTextColor = withOpacity(COLOR_TOKENS.dark["text.secondary"], 0.86);
   const overlayColor = COLOR_TOKENS.dark["bg.base"];
   const overlayOpacity = isDark ? 0.5 : 0.32;
-  const floatingBottom = Math.max(insets.bottom + 8, 20);
+  const floatingBottom = Math.max(insets.bottom + 8, 20) + bottomOffset;
   const floatingPositionStyle =
     Platform.OS === "web" ? ({ position: "fixed" } as const) : styles.absolutePosition;
 
@@ -145,12 +150,21 @@ export default function MagicMenu({
     };
   });
 
+  const handlePrimaryPress = () => {
+    if (hasDirectPrimaryAction) {
+      onPrimaryActionPress?.();
+      return;
+    }
+
+    openMenu();
+  };
+
   return (
     <View
       pointerEvents="box-none"
       style={[styles.portalLayer, floatingPositionStyle]}
     >
-      {isOpen ? (
+      {isOpen && !hasDirectPrimaryAction ? (
         <Animated.View
           style={[
             styles.overlayFill,
@@ -169,75 +183,77 @@ export default function MagicMenu({
         pointerEvents="box-none"
         style={[styles.fabContainer, { bottom: floatingBottom }]}
       >
-        <Animated.View
-          style={[
-            menuAnimatedStyle,
-            styles.shadow,
-            {
-              width: menuWidth,
-              backgroundColor: surfaceColor,
-              borderColor: menuBorderColor,
-              borderWidth: 0.5,
-              transformOrigin: "bottom right",
-            } as any,
-          ]}
-          className="mb-3 overflow-hidden rounded-[30px]"
-        >
-          <BlurView
-            intensity={isDark ? 40 : 54}
-            tint={isDark ? "dark" : "light"}
-            style={{ backgroundColor: blurOverlayColor }}
+        {!hasDirectPrimaryAction ? (
+          <Animated.View
+            style={[
+              menuAnimatedStyle,
+              styles.shadow,
+              {
+                width: menuWidth,
+                backgroundColor: surfaceColor,
+                borderColor: menuBorderColor,
+                borderWidth: 0.5,
+                transformOrigin: "bottom right",
+              } as any,
+            ]}
+            className="mb-3 overflow-hidden rounded-[30px]"
           >
-            {ACTIONS.map((item) => {
-              const onPress =
-                item.action === "task"
-                  ? onNewTask
-                  : item.action === "project"
-                    ? onNewProject
-                    : onNewClient;
-              const iconColor =
-                item.action === "task"
-                  ? COLOR_TOKENS.dark["icon.inbox"]
-                  : item.action === "project"
-                    ? COLOR_TOKENS.dark["primary.default"]
-                    : "var(--color-logbook)";
+            <BlurView
+              intensity={isDark ? 40 : 54}
+              tint={isDark ? "dark" : "light"}
+              style={{ backgroundColor: blurOverlayColor }}
+            >
+              {ACTIONS.map((item) => {
+                const onPress =
+                  item.action === "task"
+                    ? onNewTask
+                    : item.action === "project"
+                      ? onNewProject
+                      : onNewClient;
+                const iconColor =
+                  item.action === "task"
+                    ? COLOR_TOKENS.dark["icon.inbox"]
+                    : item.action === "project"
+                      ? COLOR_TOKENS.dark["primary.default"]
+                      : "var(--color-logbook)";
 
-              return (
-                <TouchableOpacity
-                  key={item.key}
-                  className="flex-row items-start px-5 py-4"
-                  onPress={() => closeMenu(onPress)}
-                >
-                  <View className="mr-3 pt-0.5">
-                    <Icon name={item.icon} size={20} color={iconColor} />
-                  </View>
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    className="flex-row items-start px-5 py-4"
+                    onPress={() => closeMenu(onPress)}
+                  >
+                    <View className="mr-3 pt-0.5">
+                      <Icon name={item.icon} size={20} color={iconColor} />
+                    </View>
 
-                  <View className="flex-1">
-                    <Text
-                      className="font-semibold text-label"
-                      style={{ color: itemTextColor }}
-                    >
-                      {item.label}
-                    </Text>
-                    <Text
-                      className="mt-0.5 font-regular text-footer"
-                      style={{ color: secondaryTextColor }}
-                    >
-                      {item.description}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </BlurView>
-        </Animated.View>
+                    <View className="flex-1">
+                      <Text
+                        className="font-semibold text-label"
+                        style={{ color: itemTextColor }}
+                      >
+                        {item.label}
+                      </Text>
+                      <Text
+                        className="mt-0.5 font-regular text-footer"
+                        style={{ color: secondaryTextColor }}
+                      >
+                        {item.description}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </BlurView>
+          </Animated.View>
+        ) : null}
 
         <Animated.View
           style={[mainButtonAnimatedStyle, { alignSelf: "flex-end", marginRight: 24 }]}
         >
           <TouchableOpacity
             activeOpacity={0.9}
-            onPress={openMenu}
+            onPress={handlePrimaryPress}
             className="h-16 w-16 items-center justify-center rounded-full"
             style={[
               styles.magicShadow,

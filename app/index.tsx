@@ -173,8 +173,8 @@ function HeaderAction({
 
 export default function HomeScreen() {
   const { colorScheme } = useColorScheme();
-  const { newProject } = useLocalSearchParams<{ newProject?: string }>();
   const theme = getThemeTokens(colorScheme === "dark");
+  const { newProject } = useLocalSearchParams<{ newProject?: string }>();
   const projectsDividerColor = withOpacity(COLOR_TOKENS.dark["text.primary"], 0.15);
   const [isCreatingInline, setIsCreatingInline] = useState(false);
   const [inlineText, setInlineText] = useState("");
@@ -197,7 +197,6 @@ export default function HomeScreen() {
     }[]
   >([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSettingsPressed, setIsSettingsPressed] = useState(false);
   const [isInlineSaving, setIsInlineSaving] = useState(false);
   const inlineSubmitLockRef = useRef(false);
@@ -216,11 +215,8 @@ export default function HomeScreen() {
       setErrorMessage(
         "Supabase nije povezan. Dodaj EXPO_PUBLIC_SUPABASE_URL i EXPO_PUBLIC_SUPABASE_ANON_KEY u .env.",
       );
-      setIsLoading(false);
       return;
     }
-
-    setIsLoading(true);
 
     try {
       const data = await fetchHomeData();
@@ -251,8 +247,6 @@ export default function HomeScreen() {
           ? error.message
           : "Nisam uspeo da ucitam podatke sa Supabase.",
       );
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
@@ -487,7 +481,7 @@ export default function HomeScreen() {
             position: "absolute",
             left: 0,
             right: 0,
-            bottom: 60,
+            bottom: 106,
             zIndex: 20,
             alignItems: "center",
           }}
@@ -543,6 +537,7 @@ export default function HomeScreen() {
             </View>
           </TouchableOpacity>
         </View>
+
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

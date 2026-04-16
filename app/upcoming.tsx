@@ -20,10 +20,12 @@ import React, {
 } from "react";
 import { Pressable, View } from "react-native";
 import Animated, {
+  Easing,
   Extrapolation,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
+  withTiming,
 } from "react-native-reanimated";
 
 type UpcomingTask = {
@@ -59,6 +61,8 @@ type YearSection = {
 const DAY_SECTION_COUNT = 7;
 const UPCOMING_MONTH_COUNT = 4;
 const EMPTY_SECTION_HEIGHT = 30;
+const EXPANDED_SHIFT_UP = 40;
+const EXPANDED_SHIFT_DOWN = 34;
 
 function withOpacity(hexColor: string, opacity: number) {
   const sanitized = hexColor.replace("#", "");
@@ -130,6 +134,57 @@ function formatTaskPrefix(dateIso: string | null) {
   }
 
   return `${parsed.getDate()}.${parsed.getMonth() + 1}.`;
+}
+
+function getNeighborShift(taskIndex: number, expandedIndex: number) {
+  if (expandedIndex < 0) {
+    return 0;
+  }
+
+  if (taskIndex < expandedIndex) {
+    return -EXPANDED_SHIFT_UP;
+  }
+
+  if (taskIndex > expandedIndex) {
+    return EXPANDED_SHIFT_DOWN;
+  }
+
+  return 0;
+}
+
+function getSectionHeaderShift(expandedIndex: number) {
+  return expandedIndex >= 0 ? -EXPANDED_SHIFT_UP : 0;
+}
+
+function getTopBlockShift(blockOrder: number, expandedBlockOrder: number) {
+  if (expandedBlockOrder < 0 || blockOrder < 0) {
+    return 0;
+  }
+
+  return blockOrder < expandedBlockOrder ? -EXPANDED_SHIFT_UP : 0;
+}
+
+function TaskShiftContainer({
+  shift,
+  children,
+}: {
+  shift: number;
+  children: React.ReactNode;
+}) {
+  const animatedShift = useSharedValue(shift);
+
+  useEffect(() => {
+    animatedShift.value = withTiming(shift, {
+      duration: 210,
+      easing: Easing.bezier(0.22, 0, 0.18, 1),
+    });
+  }, [animatedShift, shift]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: animatedShift.value }],
+  }));
+
+  return <Animated.View style={animatedStyle}>{children}</Animated.View>;
 }
 
 export default function UpcomingScreen() {
@@ -491,6 +546,82 @@ export default function UpcomingScreen() {
       yearSections: groupedYears,
     };
   }, [tasks]);
+  const firstRangeExpandedTaskIndex = firstMonthRangeSection.tasks.findIndex(
+    (task) => task.id === expandedTaskId,
+  );
+  const { blockOrderByKey, expandedTopBlockOrder } = useMemo(() => {
+    const dayBlockKeys = daySections.map((section) => `day:${section.key}`);
+    const firstRangeBlockKey = `range:${firstMonthRangeSection.key}`;
+    const monthBlockKeys = upcomingMonthSections.map(
+      (section) => `month:${section.key}`,
+    );
+    const yearBlockKeys = yearSections.map((section) => `year:${section.key}`);
+    const allBlockKeys = [
+      ...dayBlockKeys,
+      firstRangeBlockKey,
+      ...monthBlockKeys,
+      ...yearBlockKeys,
+    ];
+    const orderMap = new Map(allBlockKeys.map((key, index) => [key, index]));
+
+    if (!expandedTaskId) {
+      return {
+        blockOrderByKey: orderMap,
+        expandedTopBlockOrder: -1,
+      };
+    }
+
+    let expandedBlockKey: string | null = null;
+
+    for (const section of daySections) {
+      if (section.tasks.some((task) => task.id === expandedTaskId)) {
+        expandedBlockKey = `day:${section.key}`;
+        break;
+      }
+    }
+
+    if (
+      !expandedBlockKey &&
+      firstMonthRangeSection.tasks.some((task) => task.id === expandedTaskId)
+    ) {
+      expandedBlockKey = firstRangeBlockKey;
+    }
+
+    if (!expandedBlockKey) {
+      for (const section of upcomingMonthSections) {
+        if (section.tasks.some((task) => task.id === expandedTaskId)) {
+          expandedBlockKey = `month:${section.key}`;
+          break;
+        }
+      }
+    }
+
+    if (!expandedBlockKey) {
+      for (const section of yearSections) {
+        if (section.tasks.some((task) => task.id === expandedTaskId)) {
+          expandedBlockKey = `year:${section.key}`;
+          break;
+        }
+      }
+    }
+
+    return {
+      blockOrderByKey: orderMap,
+      expandedTopBlockOrder:
+        expandedBlockKey === null ? -1 : (orderMap.get(expandedBlockKey) ?? -1),
+    };
+  }, [
+    daySections,
+    expandedTaskId,
+    firstMonthRangeSection.key,
+    firstMonthRangeSection.tasks,
+    upcomingMonthSections,
+    yearSections,
+  ]);
+  const firstRangeBlockShift = getTopBlockShift(
+    blockOrderByKey.get(`range:${firstMonthRangeSection.key}`) ?? -1,
+    expandedTopBlockOrder,
+  );
 
   return (
     <View className="flex-1 bg-things-bg">
@@ -532,175 +663,259 @@ export default function UpcomingScreen() {
 
         {tasks.length > 0 ? (
           <Pressable className="mb-20" onPress={() => setExpandedTaskId(null)}>
-            {daySections.map((section, index) => (
-              <View
-                key={section.key}
-                className={index === daySections.length - 1 ? "mb-0" : "mb-8"}
-              >
-                <View className="flex-row items-end">
-                  <Text
-                    className="w-[46px] font-bold text-things-text"
-                    style={{ fontSize: 27, lineHeight: 31 }}
+            {daySections.map((section, index) => {
+              const expandedTaskIndex = section.tasks.findIndex(
+                (task) => task.id === expandedTaskId,
+              );
+              const isSectionExpanded = expandedTaskIndex >= 0;
+              const sectionHeaderShift = getSectionHeaderShift(expandedTaskIndex);
+              const dayBlockShift = getTopBlockShift(
+                blockOrderByKey.get(`day:${section.key}`) ?? -1,
+                expandedTopBlockOrder,
+              );
+              return (
+                <TaskShiftContainer key={section.key} shift={dayBlockShift}>
+                  <View
+                    className={index === daySections.length - 1 ? "mb-0" : "mb-8"}
                   >
-                    {section.date.getDate()}
-                  </Text>
-                  <View className="flex-1">
+                    <TaskShiftContainer shift={sectionHeaderShift}>
+                      <View className="flex-row items-end">
+                        <Text
+                          className="w-[46px] font-bold text-things-text"
+                          style={{ fontSize: 27, lineHeight: 31 }}
+                        >
+                          {section.date.getDate()}
+                        </Text>
+                        <View className="flex-1">
+                          <View
+                            className="h-px w-full"
+                            style={{ backgroundColor: dividerColor }}
+                          />
+                          <Text className="mt-2 font-semibold text-label-sm text-things-muted">
+                            {section.label}
+                          </Text>
+                        </View>
+                      </View>
+                    </TaskShiftContainer>
+
                     <View
-                      className="h-px w-full"
-                      style={{ backgroundColor: dividerColor }}
-                    />
-                    <Text className="mt-2 font-semibold text-label-sm text-things-muted">
-                      {section.label}
-                    </Text>
-                  </View>
-                </View>
-
-                <View
-                  style={
-                    index === daySections.length - 1 && section.tasks.length === 0
-                      ? { height: EMPTY_SECTION_HEIGHT }
-                      : { minHeight: EMPTY_SECTION_HEIGHT }
-                  }
-                >
-                  {section.tasks.map((task) => (
-                    <InlineTodoAccordion
-                      key={task.id}
-                      task={task}
-                      isExpanded={expandedTaskId === task.id}
-                      checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
-                      checkboxBorderColor={checkboxBorderColor}
-                      checkedColor={checkedColor}
-                      checkedIconColor={checkedIconColor}
-                      isChecked={checkedIds.has(task.id)}
-                      isFading={fadingIds.has(task.id)}
-                      isBusy={checkingIds.has(task.id)}
-                      onCheckPress={(taskId) => void handleCompleteTask(taskId)}
-                      onToggleExpanded={(taskId) =>
-                        setExpandedTaskId((current) =>
-                          current === taskId ? null : taskId,
-                        )
+                      style={
+                        index === daySections.length - 1 && section.tasks.length === 0
+                          ? {
+                              height: EMPTY_SECTION_HEIGHT,
+                              marginTop: isSectionExpanded ? 10 : 6,
+                            }
+                          : {
+                              minHeight: EMPTY_SECTION_HEIGHT,
+                              marginTop: isSectionExpanded ? 10 : 6,
+                            }
                       }
-                      onFadeComplete={handleFadeComplete}
-                      onSave={handleSaveTask}
-                    />
-                  ))}
-                </View>
-              </View>
-            ))}
+                    >
+                      {section.tasks.map((task, taskIndex) => {
+                        const verticalShift = getNeighborShift(
+                          taskIndex,
+                          expandedTaskIndex,
+                        );
+                        return (
+                          <TaskShiftContainer key={task.id} shift={verticalShift}>
+                            <InlineTodoAccordion
+                              task={task}
+                              isExpanded={expandedTaskId === task.id}
+                              checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                              checkboxBorderColor={checkboxBorderColor}
+                              checkedColor={checkedColor}
+                              checkedIconColor={checkedIconColor}
+                              isChecked={checkedIds.has(task.id)}
+                              isFading={fadingIds.has(task.id)}
+                              isBusy={checkingIds.has(task.id)}
+                              onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                              onToggleExpanded={(taskId) =>
+                                setExpandedTaskId((current) =>
+                                  current === taskId ? null : taskId,
+                                )
+                              }
+                              onFadeComplete={handleFadeComplete}
+                              onSave={handleSaveTask}
+                            />
+                          </TaskShiftContainer>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </TaskShiftContainer>
+              );
+            })}
 
-            <View className="mb-8">
-              <View style={{ height: EMPTY_SECTION_HEIGHT }} />
-              <View
-                className="mt-3 h-px w-full"
-                style={{ backgroundColor: dividerColor }}
-              />
-              <Text className="mt-2 font-semibold text-label-sm">
-                <Text className="text-things-text">
-                  {firstMonthRangeSection.start.toLocaleDateString("en-US", {
-                    month: "long",
-                  })}{" "}
-                </Text>
-                <Text className="text-things-muted">
-                  {`${firstMonthRangeSection.start.getDate()}-${firstMonthRangeSection.end.getDate()}`}
-                </Text>
-              </Text>
-              {firstMonthRangeSection.tasks.map((task) => (
-                <InlineTodoAccordion
-                  key={task.id}
-                  task={task}
-                  titlePrefix={formatTaskPrefix(task.scheduledDate)}
-                  isExpanded={expandedTaskId === task.id}
-                  checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
-                  checkboxBorderColor={checkboxBorderColor}
-                  checkedColor={checkedColor}
-                  checkedIconColor={checkedIconColor}
-                  isChecked={checkedIds.has(task.id)}
-                  isFading={fadingIds.has(task.id)}
-                  isBusy={checkingIds.has(task.id)}
-                  onCheckPress={(taskId) => void handleCompleteTask(taskId)}
-                  onToggleExpanded={(taskId) =>
-                    setExpandedTaskId((current) =>
-                      current === taskId ? null : taskId,
-                    )
-                  }
-                  onFadeComplete={handleFadeComplete}
-                  onSave={handleSaveTask}
-                />
-              ))}
-            </View>
-
-            {upcomingMonthSections.map((section) => (
-              <View key={section.key} className="mb-8">
-                <View style={{ height: EMPTY_SECTION_HEIGHT }} />
-                <View
-                  className="mt-3 h-px w-full"
-                  style={{ backgroundColor: dividerColor }}
-                />
-                <Text className="mt-2 font-semibold text-label-sm text-things-text">
-                  {section.label}
-                </Text>
-
-                {section.tasks.map((task) => (
-                  <InlineTodoAccordion
-                    key={task.id}
-                    task={task}
-                    titlePrefix={formatTaskPrefix(task.scheduledDate)}
-                    isExpanded={expandedTaskId === task.id}
-                    checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
-                    checkboxBorderColor={checkboxBorderColor}
-                    checkedColor={checkedColor}
-                    checkedIconColor={checkedIconColor}
-                    isChecked={checkedIds.has(task.id)}
-                    isFading={fadingIds.has(task.id)}
-                    isBusy={checkingIds.has(task.id)}
-                    onCheckPress={(taskId) => void handleCompleteTask(taskId)}
-                    onToggleExpanded={(taskId) =>
-                      setExpandedTaskId((current) =>
-                        current === taskId ? null : taskId,
-                      )
-                    }
-                    onFadeComplete={handleFadeComplete}
-                    onSave={handleSaveTask}
+            <TaskShiftContainer shift={firstRangeBlockShift}>
+              <View className="mb-8">
+                <TaskShiftContainer
+                  shift={getSectionHeaderShift(firstRangeExpandedTaskIndex)}
+                >
+                  <View style={{ height: EMPTY_SECTION_HEIGHT }} />
+                  <View
+                    className="mt-3 h-px w-full"
+                    style={{ backgroundColor: dividerColor }}
                   />
-                ))}
+                  <Text className="mt-2 font-semibold text-label-sm">
+                    <Text className="text-things-text">
+                      {firstMonthRangeSection.start.toLocaleDateString("en-US", {
+                        month: "long",
+                      })}{" "}
+                    </Text>
+                    <Text className="text-things-muted">
+                      {`${firstMonthRangeSection.start.getDate()}-${firstMonthRangeSection.end.getDate()}`}
+                    </Text>
+                  </Text>
+                </TaskShiftContainer>
+                {firstMonthRangeSection.tasks.map((task, taskIndex) => {
+                  const verticalShift = getNeighborShift(
+                    taskIndex,
+                    firstRangeExpandedTaskIndex,
+                  );
+                  return (
+                    <TaskShiftContainer key={task.id} shift={verticalShift}>
+                      <InlineTodoAccordion
+                        task={task}
+                        titlePrefix={formatTaskPrefix(task.scheduledDate)}
+                        isExpanded={expandedTaskId === task.id}
+                        checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                        checkboxBorderColor={checkboxBorderColor}
+                        checkedColor={checkedColor}
+                        checkedIconColor={checkedIconColor}
+                        isChecked={checkedIds.has(task.id)}
+                        isFading={fadingIds.has(task.id)}
+                        isBusy={checkingIds.has(task.id)}
+                        onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                        onToggleExpanded={(taskId) =>
+                          setExpandedTaskId((current) =>
+                            current === taskId ? null : taskId,
+                          )
+                        }
+                        onFadeComplete={handleFadeComplete}
+                        onSave={handleSaveTask}
+                      />
+                    </TaskShiftContainer>
+                  );
+                })}
               </View>
-            ))}
+            </TaskShiftContainer>
 
-            {yearSections.map((yearSection) => (
-              <View key={yearSection.key} className="mb-8">
-                <View
-                  className="mb-2 h-px w-full"
-                  style={{ backgroundColor: dividerColor }}
-                />
-                <Text className="font-bold text-body-md text-things-text">
-                  {yearSection.label}
-                </Text>
+            {upcomingMonthSections.map((section) => {
+              const expandedTaskIndex = section.tasks.findIndex(
+                (task) => task.id === expandedTaskId,
+              );
+              const sectionBlockShift = getTopBlockShift(
+                blockOrderByKey.get(`month:${section.key}`) ?? -1,
+                expandedTopBlockOrder,
+              );
+              return (
+                <TaskShiftContainer key={section.key} shift={sectionBlockShift}>
+                  <View className="mb-8">
+                    <TaskShiftContainer
+                      shift={getSectionHeaderShift(expandedTaskIndex)}
+                    >
+                      <View style={{ height: EMPTY_SECTION_HEIGHT }} />
+                      <View
+                        className="mt-3 h-px w-full"
+                        style={{ backgroundColor: dividerColor }}
+                      />
+                      <Text className="mt-2 font-semibold text-label-sm text-things-text">
+                        {section.label}
+                      </Text>
+                    </TaskShiftContainer>
 
-                {yearSection.tasks.map((task) => (
-                  <InlineTodoAccordion
-                    key={task.id}
-                    task={task}
-                    titlePrefix={formatTaskPrefix(task.scheduledDate)}
-                    isExpanded={expandedTaskId === task.id}
-                    checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
-                    checkboxBorderColor={checkboxBorderColor}
-                    checkedColor={checkedColor}
-                    checkedIconColor={checkedIconColor}
-                    isChecked={checkedIds.has(task.id)}
-                    isFading={fadingIds.has(task.id)}
-                    isBusy={checkingIds.has(task.id)}
-                    onCheckPress={(taskId) => void handleCompleteTask(taskId)}
-                    onToggleExpanded={(taskId) =>
-                      setExpandedTaskId((current) =>
-                        current === taskId ? null : taskId,
-                      )
-                    }
-                    onFadeComplete={handleFadeComplete}
-                    onSave={handleSaveTask}
-                  />
-                ))}
-              </View>
-            ))}
+                    {section.tasks.map((task, taskIndex) => {
+                      const verticalShift = getNeighborShift(
+                        taskIndex,
+                        expandedTaskIndex,
+                      );
+                      return (
+                        <TaskShiftContainer key={task.id} shift={verticalShift}>
+                          <InlineTodoAccordion
+                            task={task}
+                            titlePrefix={formatTaskPrefix(task.scheduledDate)}
+                            isExpanded={expandedTaskId === task.id}
+                            checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                            checkboxBorderColor={checkboxBorderColor}
+                            checkedColor={checkedColor}
+                            checkedIconColor={checkedIconColor}
+                            isChecked={checkedIds.has(task.id)}
+                            isFading={fadingIds.has(task.id)}
+                            isBusy={checkingIds.has(task.id)}
+                            onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                            onToggleExpanded={(taskId) =>
+                              setExpandedTaskId((current) =>
+                                current === taskId ? null : taskId,
+                              )
+                            }
+                            onFadeComplete={handleFadeComplete}
+                            onSave={handleSaveTask}
+                          />
+                        </TaskShiftContainer>
+                      );
+                    })}
+                  </View>
+                </TaskShiftContainer>
+              );
+            })}
+
+            {yearSections.map((yearSection) => {
+              const expandedTaskIndex = yearSection.tasks.findIndex(
+                (task) => task.id === expandedTaskId,
+              );
+              const sectionBlockShift = getTopBlockShift(
+                blockOrderByKey.get(`year:${yearSection.key}`) ?? -1,
+                expandedTopBlockOrder,
+              );
+              return (
+                <TaskShiftContainer key={yearSection.key} shift={sectionBlockShift}>
+                  <View className="mb-8">
+                    <TaskShiftContainer
+                      shift={getSectionHeaderShift(expandedTaskIndex)}
+                    >
+                      <View
+                        className="mb-2 h-px w-full"
+                        style={{ backgroundColor: dividerColor }}
+                      />
+                      <Text className="font-bold text-body-md text-things-text">
+                        {yearSection.label}
+                      </Text>
+                    </TaskShiftContainer>
+
+                    {yearSection.tasks.map((task, taskIndex) => {
+                      const verticalShift = getNeighborShift(
+                        taskIndex,
+                        expandedTaskIndex,
+                      );
+                      return (
+                        <TaskShiftContainer key={task.id} shift={verticalShift}>
+                          <InlineTodoAccordion
+                            task={task}
+                            titlePrefix={formatTaskPrefix(task.scheduledDate)}
+                            isExpanded={expandedTaskId === task.id}
+                            checkboxSize={SIZE_TOKENS.quickTaskCheckbox}
+                            checkboxBorderColor={checkboxBorderColor}
+                            checkedColor={checkedColor}
+                            checkedIconColor={checkedIconColor}
+                            isChecked={checkedIds.has(task.id)}
+                            isFading={fadingIds.has(task.id)}
+                            isBusy={checkingIds.has(task.id)}
+                            onCheckPress={(taskId) => void handleCompleteTask(taskId)}
+                            onToggleExpanded={(taskId) =>
+                              setExpandedTaskId((current) =>
+                                current === taskId ? null : taskId,
+                              )
+                            }
+                            onFadeComplete={handleFadeComplete}
+                            onSave={handleSaveTask}
+                          />
+                        </TaskShiftContainer>
+                      );
+                    })}
+                  </View>
+                </TaskShiftContainer>
+              );
+            })}
           </Pressable>
         ) : (
           <View className="flex-1 items-center justify-center">

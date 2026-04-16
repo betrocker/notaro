@@ -64,7 +64,7 @@ function formatCompletedDate(dateString: string | null) {
 
   const day = date.getDate();
   const month = date.getMonth() + 1;
-  return `${day}.${month}.`;
+  return `${day}. ${month}.`;
 }
 
 function isSameDay(left: Date, right: Date) {

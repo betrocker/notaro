@@ -6,11 +6,16 @@ import {
   COLOR_TOKENS,
   RADIUS_TOKENS,
 } from "@/lib/design-system/tokens";
+import { subscribeClientPickerSelection } from "@/lib/clientPicker";
+import { router } from "expo-router";
 import { useColorScheme } from "nativewind";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Pressable, TextInput as RNTextInput, TouchableOpacity, View } from "react-native";
 import Animated, {
   Easing,
+  FadeOut,
+  LinearTransition,
+  SlideInLeft,
   SlideInRight,
   SlideOutRight,
   interpolate,
@@ -26,8 +31,6 @@ type ChecklistItem = {
   text: string;
 };
 
-type ChecklistEditCommitResult = "none" | "removed" | "removed_moved_previous";
-
 type WhenSelection =
   | { type: "none" }
   | { type: "date"; date: Date }
@@ -38,6 +41,8 @@ type TodoItem = {
   id: string;
   title: string;
   description: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
   scheduledDate?: string | null;
   deadlineDateIso?: string | null;
   checklistItems?: string[];
@@ -47,6 +52,7 @@ type TodoItem = {
 type SavePayload = {
   title: string;
   description: string;
+  clientId?: string | null;
   scheduledDateIso?: string | null;
   deadlineDateIso?: string | null;
   checklistItems?: string[];
@@ -56,6 +62,7 @@ type SavePayload = {
 const CHECKED_HOLD_DURATION_MS = 2300;
 const CHECKED_FADE_OUT_DURATION_MS = 320;
 const NOTES_MIN_HEIGHT = 36;
+const CHECKLIST_FOCUS_RETRY_MS = 24;
 
 function withOpacity(hexColor: string, opacity: number) {
   const sanitized = hexColor.replace("#", "");
@@ -238,6 +245,8 @@ export default function InlineTodoAccordion({
   isFading,
   isBusy,
   isExpanded,
+  allowClientAssignment = true,
+  syncFromTaskWhenCollapsed = true,
   onCheckPress,
   onToggleExpanded,
   onFadeComplete,
@@ -253,6 +262,8 @@ export default function InlineTodoAccordion({
   isFading: boolean;
   isBusy: boolean;
   isExpanded: boolean;
+  allowClientAssignment?: boolean;
+  syncFromTaskWhenCollapsed?: boolean;
   onCheckPress: (taskId: string) => void;
   onToggleExpanded: (taskId: string) => void;
   onFadeComplete: (taskId: string) => void;
@@ -263,10 +274,16 @@ export default function InlineTodoAccordion({
   const primaryTextColor = COLOR_TOKENS[colorMode]["text.primary"];
   const secondaryTextColor = COLOR_TOKENS[colorMode]["text.secondary"];
   const inputBorderColor = COLOR_TOKENS[colorMode]["btn.secondary"];
+  const dateBadgeBackgroundColor = withOpacity(
+    COLOR_TOKENS[colorMode]["btn.secondary"],
+    colorMode === "dark" ? 0.7 : 0.9,
+  );
   const accordionBg = withOpacity(COLOR_TOKENS[colorMode]["bg.input"], 0.72);
   const selectionColor = COLOR_TOKENS.light["primary.default"];
   const checklistActiveBg = COLOR_TOKENS[colorMode]["btn.secondary"];
   const checklistDotColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const checklistCheckColor = secondaryTextColor;
+  const checklistCompletedTextColor = withOpacity(primaryTextColor, 0.58);
 
   const rowOpacity = useSharedValue(1);
   const surfaceProgress = useSharedValue(isExpanded ? 1 : 0);
@@ -290,7 +307,11 @@ export default function InlineTodoAccordion({
   const [savedDeadlineDateIso, setSavedDeadlineDateIso] = useState<string | null>(
     task.deadlineDateIso ?? null,
   );
-  const [selectedTagLabel] = useState<string | null>(null);
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [selectedClientLabel, setSelectedClientLabel] = useState<string | null>(null);
+  const [savedClientId, setSavedClientId] = useState<string | null>(
+    task.clientId ?? null,
+  );
   const [isWhenModalOpen, setIsWhenModalOpen] = useState(false);
   const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
   const [isNotesFocused, setIsNotesFocused] = useState(false);
@@ -306,24 +327,23 @@ export default function InlineTodoAccordion({
   const [savedChecklistSignature, setSavedChecklistSignature] = useState(() =>
     JSON.stringify(normalizeChecklistTexts(task.checklistItems)),
   );
+  const [completedChecklistItemIds, setCompletedChecklistItemIds] = useState<string[]>(
+    [],
+  );
   const [checklistDraft, setChecklistDraft] = useState("");
-  const [, setIsChecklistVisible] = useState(false);
-  const [isChecklistSurfaceActive, setIsChecklistSurfaceActive] = useState(false);
-  const [armedDeleteChecklistItemId, setArmedDeleteChecklistItemId] = useState<
-    string | null
-  >(null);
+  const [isChecklistVisible, setIsChecklistVisible] = useState(false);
+  const [isChecklistComposerOpen, setIsChecklistComposerOpen] = useState(false);
   const [editingChecklistItemId, setEditingChecklistItemId] = useState<
     string | null
   >(null);
   const [editingChecklistText, setEditingChecklistText] = useState("");
+  const titleInputRef = useRef<RNTextInput>(null);
+  const notesInputRef = useRef<RNTextInput>(null);
   const checklistDraftInputRef = useRef<RNTextInput>(null);
+  const activeClientPickerTokenRef = useRef<string | null>(null);
   const checklistItemsRef = useRef<ChecklistItem[]>([]);
   const checklistItemInputRefs = useRef<Record<string, RNTextInput | null>>({});
-  const editingChecklistTextRef = useRef("");
-  const armedDeleteChecklistItemIdRef = useRef<string | null>(null);
   const skipChecklistBlurForItemIdRef = useRef<string | null>(null);
-  const isOpeningChecklistRef = useRef(false);
-  const isCollapsingChecklistRef = useRef(false);
   const checklistItemFocusTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>(
     [],
   );
@@ -350,10 +370,7 @@ export default function InlineTodoAccordion({
     if (isExpanded) {
       // Opening: surface fades in as pill → expands to full width → body drops
       surfaceProgress.value = withTiming(1, { duration: 620, easing: smooth });
-      bodyProgress.value = withDelay(
-        160,
-        withTiming(1, { duration: 580, easing: smooth }),
-      );
+      bodyProgress.value = withTiming(1, { duration: 580, easing: smooth });
     } else {
       // Closing: body collapses → surface shrinks to pill → gently fades out
       bodyProgress.value = withTiming(0, { duration: 480, easing: smooth });
@@ -380,6 +397,7 @@ export default function InlineTodoAccordion({
     const hasDraftChanges =
       nextTitle !== savedTitle.trim() ||
       nextNotes !== savedNotes.trim() ||
+      selectedClientId !== savedClientId ||
       nextWhenKey !== savedWhenKey ||
       deadlineDateIso !== savedDeadlineDateIso ||
       checklistSignature !== savedChecklistSignature;
@@ -400,6 +418,7 @@ export default function InlineTodoAccordion({
       await onSave(task.id, {
         title: nextTitle,
         description: nextNotes,
+        clientId: selectedClientId,
         scheduledDateIso: persistence.scheduledDateIso,
         deadlineDateIso,
         checklistItems: checklistTexts,
@@ -407,6 +426,7 @@ export default function InlineTodoAccordion({
       });
       setSavedTitle(nextTitle);
       setSavedNotes(nextNotes);
+      setSavedClientId(selectedClientId);
       setSavedWhenKey(nextWhenKey);
       setSavedDeadlineDateIso(deadlineDateIso);
       setSavedChecklistSignature(checklistSignature);
@@ -419,10 +439,13 @@ export default function InlineTodoAccordion({
       setIsSaving(false);
     }
   }, [
+    deadlineDate,
     isSaving,
     notes,
     onSave,
     savedChecklistSignature,
+    savedClientId,
+    selectedClientId,
     savedDeadlineDateIso,
     savedNotes,
     savedTitle,
@@ -438,8 +461,25 @@ export default function InlineTodoAccordion({
     }
 
     if (wasExpandedRef.current) {
-      collapseChecklist({ dismissKeyboard: true });
+      const trimmedDraft = checklistDraft.trim();
+      if (trimmedDraft.length > 0) {
+        const nextItems = [
+          ...checklistItemsRef.current,
+          { id: createChecklistItemId(), text: trimmedDraft },
+        ];
+        checklistItemsRef.current = nextItems;
+        setChecklistItems(nextItems);
+        setChecklistDraft("");
+      }
+      setIsChecklistComposerOpen(false);
+      setEditingChecklistItemId(null);
+      setEditingChecklistText("");
+      setIsChecklistVisible(checklistItemsRef.current.length > 0);
       void commitChanges();
+      return;
+    }
+
+    if (!syncFromTaskWhenCollapsed) {
       return;
     }
 
@@ -451,28 +491,41 @@ export default function InlineTodoAccordion({
     setSavedTitle(task.title ?? "");
     setNotes(task.description ?? "");
     setSavedNotes(task.description ?? "");
+    setSelectedClientId(task.clientId ?? null);
+    setSelectedClientLabel(task.clientName ?? null);
+    setSavedClientId(task.clientId ?? null);
     setWhenSelection((current) =>
       whenSelectionKey(current) === nextWhenKey ? current : nextWhenSelection,
     );
     setSavedWhenKey(nextWhenKey);
     setDeadlineDate(fromDateOnlyIso(nextDeadlineDateIso));
     setSavedDeadlineDateIso(nextDeadlineDateIso);
-    setChecklistItems(checklistTextsToItems(nextChecklistTexts));
+    const nextChecklistItems = checklistTextsToItems(nextChecklistTexts);
+    setChecklistItems(nextChecklistItems);
+    checklistItemsRef.current = nextChecklistItems;
     setSavedChecklistSignature(JSON.stringify(nextChecklistTexts));
+    setCompletedChecklistItemIds([]);
     setChecklistDraft("");
     setIsChecklistVisible(nextChecklistTexts.length > 0);
-    setIsChecklistSurfaceActive(false);
+    setIsChecklistComposerOpen(false);
+    setEditingChecklistItemId(null);
+    setEditingChecklistText("");
+    skipChecklistBlurForItemIdRef.current = null;
     setErrorMessage(null);
   }, [
     commitChanges,
     isExpanded,
     task.checklistItems,
+    task.clientId,
+    task.clientName,
     task.deadlineDateIso,
     task.description,
     task.id,
     task.scheduledDate,
     task.status,
     task.title,
+    checklistDraft,
+    syncFromTaskWhenCollapsed,
   ]);
 
   useEffect(() => {
@@ -484,12 +537,24 @@ export default function InlineTodoAccordion({
   }, [checklistItems]);
 
   useEffect(() => {
-    editingChecklistTextRef.current = editingChecklistText;
-  }, [editingChecklistText]);
+    if (!isChecklistComposerOpen) {
+      return;
+    }
+    setEditingChecklistItemId(null);
+    setEditingChecklistText("");
+  }, [isChecklistComposerOpen]);
 
   useEffect(() => {
-    armedDeleteChecklistItemIdRef.current = armedDeleteChecklistItemId;
-  }, [armedDeleteChecklistItemId]);
+    setCompletedChecklistItemIds((current) => {
+      if (current.length === 0) {
+        return current;
+      }
+
+      const existingIds = new Set(checklistItems.map((item) => item.id));
+      const next = current.filter((itemId) => existingIds.has(itemId));
+      return next.length === current.length ? current : next;
+    });
+  }, [checklistItems]);
 
   useEffect(() => {
     return () => {
@@ -500,15 +565,54 @@ export default function InlineTodoAccordion({
     };
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = subscribeClientPickerSelection((selection) => {
+      if (!activeClientPickerTokenRef.current) {
+        return;
+      }
+
+      if (selection.token !== activeClientPickerTokenRef.current) {
+        return;
+      }
+
+      activeClientPickerTokenRef.current = null;
+      setSelectedClientId(selection.clientId);
+      setSelectedClientLabel(selection.clientName);
+    });
+
+    return unsubscribe;
+  }, []);
+
   const handleToolbarIconPress = (action?: () => void) => {
     Keyboard.dismiss();
-    setIsChecklistSurfaceActive(false);
     action?.();
   };
+  const openClientsModal = () => {
+    const pickerToken = `picker-${task.id}-${Date.now()}`;
+    activeClientPickerTokenRef.current = pickerToken;
 
-  const handleChecklistInputFocus = () => {
-    setIsChecklistVisible(true);
-    setIsChecklistSurfaceActive(true);
+    handleToolbarIconPress(() =>
+      router.push({
+        pathname: "/clients",
+        params: {
+          pickerToken,
+          ...(selectedClientId ? { selectedClientId } : {}),
+          ...(allowClientAssignment ? { jobId: task.id } : {}),
+        },
+      }),
+    );
+  };
+
+  const focusTitleInput = () => {
+    requestAnimationFrame(() => {
+      titleInputRef.current?.focus();
+    });
+  };
+
+  const focusNotesInput = () => {
+    requestAnimationFrame(() => {
+      notesInputRef.current?.focus();
+    });
   };
 
   const focusChecklistDraftWithRetry = (attempt = 0) => {
@@ -525,7 +629,7 @@ export default function InlineTodoAccordion({
 
     setTimeout(() => {
       focusChecklistDraftWithRetry(attempt + 1);
-    }, 24);
+    }, CHECKLIST_FOCUS_RETRY_MS);
   };
 
   const focusChecklistItemWithRetry = (itemId: string, attempt = 0) => {
@@ -542,7 +646,7 @@ export default function InlineTodoAccordion({
 
     setTimeout(() => {
       focusChecklistItemWithRetry(itemId, attempt + 1);
-    }, 24);
+    }, CHECKLIST_FOCUS_RETRY_MS);
   };
 
   const clearChecklistItemFocusTimeouts = () => {
@@ -569,170 +673,173 @@ export default function InlineTodoAccordion({
   const clearChecklistEditingState = () => {
     setEditingChecklistItemId(null);
     setEditingChecklistText("");
-    editingChecklistTextRef.current = "";
-    armedDeleteChecklistItemIdRef.current = null;
-    setArmedDeleteChecklistItemId(null);
   };
 
-  const collapseChecklist = ({ dismissKeyboard = false } = {}) => {
-    isOpeningChecklistRef.current = false;
-    isCollapsingChecklistRef.current = true;
-    const trimmedDraft = checklistDraft.trim();
-    let nextItems = checklistItemsRef.current;
-
-    if (trimmedDraft.length > 0) {
-      nextItems = [
-        ...checklistItemsRef.current,
-        { id: createChecklistItemId(), text: trimmedDraft },
-      ];
-      checklistItemsRef.current = nextItems;
-      setChecklistItems(nextItems);
-    }
-
+  const openChecklistComposer = () => {
+    setIsChecklistVisible(true);
+    setIsChecklistComposerOpen(true);
     clearChecklistEditingState();
-    setChecklistDraft("");
-    setIsChecklistSurfaceActive(false);
-    setIsChecklistVisible(nextItems.length > 0);
-    if (dismissKeyboard) {
-      Keyboard.dismiss();
-    }
-    isCollapsingChecklistRef.current = false;
+    requestAnimationFrame(() => {
+      focusChecklistDraftWithRetry();
+    });
   };
 
   const handleSubmitChecklistDraft = () => {
-    const trimmedValue = checklistDraft.trim();
-    if (!trimmedValue) {
+    const trimmedDraft = checklistDraft.trim();
+    if (!trimmedDraft.length) {
       return;
     }
 
     const nextItems = [
       ...checklistItemsRef.current,
-      { id: createChecklistItemId(), text: trimmedValue },
+      { id: createChecklistItemId(), text: trimmedDraft },
     ];
     checklistItemsRef.current = nextItems;
     setChecklistItems(nextItems);
     setChecklistDraft("");
-    setArmedDeleteChecklistItemId(null);
     setIsChecklistVisible(true);
-    setIsChecklistSurfaceActive(true);
-    focusChecklistDraftWithRetry();
-  };
-
-  const handleChecklistDraftBackspace = () => {
-    if (checklistDraft.length > 0) {
-      return;
-    }
-
-    const currentItems = checklistItemsRef.current;
-    if (currentItems.length === 0) {
-      clearChecklistItemFocusTimeouts();
-      clearChecklistEditingState();
-      setIsChecklistSurfaceActive(false);
-      setIsChecklistVisible(false);
-      Keyboard.dismiss();
-      return;
-    }
-
-    const lastItem = currentItems[currentItems.length - 1];
-    if (!lastItem) {
-      return;
-    }
-
-    handleChecklistRowPress(lastItem);
-  };
-
-  const handleChecklistRowPress = (item: ChecklistItem) => {
-    skipChecklistBlurForItemIdRef.current = null;
-    setIsChecklistVisible(true);
-    setIsChecklistSurfaceActive(true);
-    setEditingChecklistItemId(item.id);
-    setEditingChecklistText(item.text);
-    editingChecklistTextRef.current = item.text;
-    armedDeleteChecklistItemIdRef.current = null;
-    setArmedDeleteChecklistItemId(null);
-    scheduleChecklistItemFocus(item.id);
-  };
-
-  const removeChecklistItem = (itemId: string): ChecklistEditCommitResult => {
-    skipChecklistBlurForItemIdRef.current = itemId;
-    const currentItems = checklistItemsRef.current;
-    const currentIndex = currentItems.findIndex((item) => item.id === itemId);
-    if (currentIndex < 0) {
-      skipChecklistBlurForItemIdRef.current = null;
-      return "none";
-    }
-
-    const previousItem =
-      currentIndex > 0 ? currentItems[currentIndex - 1] : null;
-    const nextItems = currentItems.filter((item) => item.id !== itemId);
-
-    checklistItemsRef.current = nextItems;
-    setChecklistItems(nextItems);
-    armedDeleteChecklistItemIdRef.current = null;
-    setArmedDeleteChecklistItemId(null);
-
-    if (nextItems.length === 0) {
-      clearChecklistItemFocusTimeouts();
-      clearChecklistEditingState();
-      setIsChecklistVisible(false);
-      setIsChecklistSurfaceActive(false);
-      Keyboard.dismiss();
-      return "removed";
-    }
-
-    if (currentIndex === 0) {
-      clearChecklistItemFocusTimeouts();
-      clearChecklistEditingState();
-      setIsChecklistVisible(true);
-      setIsChecklistSurfaceActive(false);
-      Keyboard.dismiss();
-      return "removed";
-    }
-
-    if (previousItem) {
-      setEditingChecklistItemId(previousItem.id);
-      setEditingChecklistText(previousItem.text);
-      editingChecklistTextRef.current = previousItem.text;
-      setIsChecklistSurfaceActive(true);
-      scheduleChecklistItemFocus(previousItem.id);
-      return "removed_moved_previous";
-    }
-
-    clearChecklistItemFocusTimeouts();
-    clearChecklistEditingState();
-    setIsChecklistVisible(nextItems.length > 0);
-    setIsChecklistSurfaceActive(false);
-    Keyboard.dismiss();
-
-    return "removed";
-  };
-
-  const setChecklistItemText = (itemId: string, text: string) => {
-    const nextItems = checklistItemsRef.current.map((entry) =>
-      entry.id === itemId ? { ...entry, text } : entry,
-    );
-    checklistItemsRef.current = nextItems;
-    setChecklistItems(nextItems);
-  };
-
-  const handleChecklistToolbarPress = () => {
-    isOpeningChecklistRef.current = true;
-    skipChecklistBlurForItemIdRef.current = null;
-    setIsChecklistVisible(true);
-    setIsChecklistSurfaceActive(true);
+    setIsChecklistComposerOpen(true);
     clearChecklistEditingState();
     requestAnimationFrame(() => {
       focusChecklistDraftWithRetry();
-      setTimeout(() => {
-        focusChecklistDraftWithRetry();
-      }, 90);
-      setTimeout(() => {
-        focusChecklistDraftWithRetry();
-      }, 180);
-      setTimeout(() => {
-        isOpeningChecklistRef.current = false;
-      }, 360);
     });
+  };
+
+  const closeChecklistComposer = () => {
+    const trimmedDraft = checklistDraft.trim();
+
+    if (trimmedDraft.length > 0) {
+      const nextItems = [
+        ...checklistItemsRef.current,
+        { id: createChecklistItemId(), text: trimmedDraft },
+      ];
+      checklistItemsRef.current = nextItems;
+      setChecklistItems(nextItems);
+      setChecklistDraft("");
+      setIsChecklistVisible(true);
+      setIsChecklistComposerOpen(false);
+      clearChecklistEditingState();
+      return;
+    }
+
+    setIsChecklistComposerOpen(false);
+    clearChecklistEditingState();
+    setIsChecklistVisible(checklistItemsRef.current.length > 0);
+  };
+
+  const handleChecklistRowPress = (item: ChecklistItem) => {
+    const trimmedDraft = checklistDraft.trim();
+    if (isChecklistComposerOpen && trimmedDraft.length > 0) {
+      const nextItems = [
+        ...checklistItemsRef.current,
+        { id: createChecklistItemId(), text: trimmedDraft },
+      ];
+      checklistItemsRef.current = nextItems;
+      setChecklistItems(nextItems);
+      setChecklistDraft("");
+    }
+
+    setIsChecklistVisible(true);
+    setIsChecklistComposerOpen(false);
+    setEditingChecklistItemId(item.id);
+    setEditingChecklistText(item.text);
+    skipChecklistBlurForItemIdRef.current = null;
+    requestAnimationFrame(() => {
+      scheduleChecklistItemFocus(item.id);
+    });
+  };
+
+  const handleChecklistCompleteToggle = (itemId: string) => {
+    setCompletedChecklistItemIds((current) => {
+      if (current.includes(itemId)) {
+        return current.filter((entry) => entry !== itemId);
+      }
+
+      return [...current, itemId];
+    });
+  };
+
+  const handleChecklistItemTextChange = (itemId: string, text: string) => {
+    setEditingChecklistText(text);
+    setChecklistItems((current) => {
+      const next = current.map((entry) =>
+        entry.id === itemId ? { ...entry, text } : entry,
+      );
+      checklistItemsRef.current = next;
+      return next;
+    });
+  };
+
+  const removeChecklistItem = (itemId: string) => {
+    skipChecklistBlurForItemIdRef.current = itemId;
+    const currentItems = checklistItemsRef.current;
+    const removedIndex = currentItems.findIndex((entry) => entry.id === itemId);
+
+    if (removedIndex === -1) {
+      skipChecklistBlurForItemIdRef.current = null;
+      return;
+    }
+
+    const nextItems = currentItems.filter((entry) => entry.id !== itemId);
+    checklistItemsRef.current = nextItems;
+    setChecklistItems(nextItems);
+
+    if (nextItems.length > 0) {
+      const previousIndex = Math.max(0, removedIndex - 1);
+      const previousItem = nextItems[previousIndex];
+      if (previousItem) {
+        setEditingChecklistItemId(previousItem.id);
+        setEditingChecklistText(previousItem.text);
+        setIsChecklistVisible(true);
+        setIsChecklistComposerOpen(false);
+        requestAnimationFrame(() => {
+          scheduleChecklistItemFocus(previousItem.id);
+        });
+      }
+    } else {
+      clearChecklistEditingState();
+      setIsChecklistVisible(isChecklistComposerOpen);
+    }
+  };
+
+  const commitChecklistEditing = (itemId: string) => {
+    const currentText =
+      checklistItemsRef.current.find((entry) => entry.id === itemId)?.text ?? "";
+    const trimmedText = currentText.trim();
+
+    if (!trimmedText.length) {
+      removeChecklistItem(itemId);
+      return;
+    }
+
+    const nextItems = checklistItemsRef.current.map((entry) =>
+      entry.id === itemId ? { ...entry, text: trimmedText } : entry,
+    );
+    checklistItemsRef.current = nextItems;
+    setChecklistItems(nextItems);
+    clearChecklistEditingState();
+  };
+
+  const finalizeChecklistEditingOnBlur = (itemId: string) => {
+    const currentText =
+      checklistItemsRef.current.find((entry) => entry.id === itemId)?.text ?? "";
+    const trimmedText = currentText.trim();
+
+    if (!trimmedText.length) {
+      removeChecklistItem(itemId);
+      return;
+    }
+
+    const nextItems = checklistItemsRef.current.map((entry) =>
+      entry.id === itemId ? { ...entry, text: trimmedText } : entry,
+    );
+    checklistItemsRef.current = nextItems;
+    setChecklistItems(nextItems);
+    clearChecklistEditingState();
+  };
+
+  const handleChecklistToolbarPress = () => {
+    openChecklistComposer();
   };
 
   const rowAnimatedStyle = useAnimatedStyle(() => ({
@@ -753,7 +860,6 @@ export default function InlineTodoAccordion({
   }));
 
   const expandedBodyContainerAnimatedStyle = useAnimatedStyle(() => ({
-    height: interpolate(bodyProgress.value, [0, 1], [0, expandedBodyHeight]),
     opacity: interpolate(bodyProgress.value, [0, 0.35, 1], [0, 0.85, 1]),
   }));
 
@@ -830,28 +936,26 @@ export default function InlineTodoAccordion({
   const compactDeadlineLabel = deadlineDate
     ? formatCompactDateLabel(deadlineDate)
     : null;
-  const selectedTagDisplay = selectedTagLabel
-    ? { label: selectedTagLabel }
+  const selectedClientDisplay = selectedClientLabel
+    ? { label: selectedClientLabel }
     : null;
+  const bodyContentInsetLeft = Math.max(0, checkboxSize + 12 - 16);
   const visibleChecklistItems = checklistItems;
   const shouldRenderChecklist =
-    isChecklistSurfaceActive ||
-    editingChecklistItemId !== null ||
-    checklistDraft.trim().length > 0 ||
-    visibleChecklistItems.length > 0;
-  const showChecklistComposer =
-    isChecklistSurfaceActive && editingChecklistItemId === null;
+    isChecklistVisible || visibleChecklistItems.length > 0;
+  const showChecklistComposer = isChecklistComposerOpen;
   const metadataRowClassName = shouldRenderChecklist
-    ? "mt-[6px] mb-[2px] flex-row justify-between"
+    ? "mt-[18px] mb-[2px] flex-row justify-between"
     : "mt-[10px] mb-0 flex-row justify-between";
   const metadataDetailsClassName =
     "h-[78px] min-w-0 flex-1 justify-end pr-2 pb-0";
   const metadataIconsClassName =
     "ml-2 h-[78px] shrink-0 flex-row items-end justify-end self-stretch pb-0";
+  const titleRowLayoutTransition = LinearTransition.duration(190);
 
   return (
     <Pressable
-      className="relative mb-1 -mx-5 px-5"
+      className="relative mb-0 -mx-5 px-5"
       onPress={(event) => {
         event.stopPropagation();
       }}
@@ -875,7 +979,7 @@ export default function InlineTodoAccordion({
           />
 
           <Animated.View
-            className="relative flex-row items-center py-3"
+            className="relative flex-row items-center py-2"
             onLayout={handleHeaderRowLayout}
           >
             <TouchableOpacity
@@ -899,44 +1003,62 @@ export default function InlineTodoAccordion({
             </TouchableOpacity>
 
             <TouchableOpacity
-              className="flex-1 flex-row items-center"
+              className="flex-1 flex-row items-center py-1"
               activeOpacity={isExpanded ? 1 : 0.76}
-              disabled={isExpanded}
               onLayout={handleTitleLayout}
               onPress={(event) => {
                 event.stopPropagation();
+                if (isExpanded) {
+                  focusTitleInput();
+                  return;
+                }
                 onToggleExpanded(task.id);
               }}
             >
-              {titlePrefix ? (
-                <Text className="mr-2 font-medium text-footer text-things-muted">
-                  {titlePrefix}
-                </Text>
+              {!isExpanded && titlePrefix ? (
+                <Animated.View
+                  entering={SlideInLeft.duration(120)}
+                  exiting={FadeOut.duration(170)}
+                  layout={titleRowLayoutTransition}
+                  className="mr-2 rounded-md px-1.5 py-0.5"
+                  style={{ backgroundColor: dateBadgeBackgroundColor }}
+                >
+                  <Text
+                    variant="labelSm"
+                    className="font-semibold"
+                    style={{ color: primaryTextColor, fontSize: 11, lineHeight: 13 }}
+                  >
+                    {titlePrefix}
+                  </Text>
+                </Animated.View>
               ) : null}
-              <AppTextInput
-                value={title}
-                onChangeText={(nextTitle) => {
-                  setTitle(nextTitle);
-                  if (errorMessage) {
-                    setErrorMessage(null);
-                  }
-                }}
-                editable={isExpanded}
-                pointerEvents={isExpanded ? "auto" : "none"}
-                placeholder="New Quick Task"
-                placeholderTextColor={secondaryTextColor}
-                variant="bodyMd"
-                style={{
-                  minHeight: 30,
-                  flex: 1,
-                  backgroundColor: "transparent",
-                  paddingHorizontal: 0,
-                  paddingVertical: 0,
-                  color: primaryTextColor,
-                }}
-                selectionColor={selectionColor}
-                returnKeyType="done"
-              />
+              <Animated.View layout={titleRowLayoutTransition} className="flex-1">
+                <AppTextInput
+                  ref={titleInputRef}
+                  value={title}
+                  onChangeText={(nextTitle) => {
+                    setTitle(nextTitle);
+                    if (errorMessage) {
+                      setErrorMessage(null);
+                    }
+                  }}
+                  editable={isExpanded}
+                  pointerEvents={isExpanded ? "auto" : "none"}
+                  placeholder="New Quick Task"
+                  placeholderTextColor={secondaryTextColor}
+                  variant="bodyMd"
+                  style={{
+                    minHeight: 36,
+                    flex: 1,
+                    backgroundColor: "transparent",
+                    paddingHorizontal: 0,
+                    paddingVertical: 4,
+                    color: primaryTextColor,
+                  }}
+                  selectionColor={selectionColor}
+                  returnKeyType="done"
+                />
+              </Animated.View>
             </TouchableOpacity>
 
             {!isExpanded && selectedDeadlineDisplay ? (
@@ -968,36 +1090,49 @@ export default function InlineTodoAccordion({
           </Animated.View>
 
           <Animated.View
-            className="overflow-hidden"
             pointerEvents={isExpanded ? "auto" : "none"}
-            style={expandedBodyContainerAnimatedStyle}
+            style={[
+              {
+                height: isExpanded ? undefined : 0,
+                overflow: "hidden",
+              },
+              expandedBodyContainerAnimatedStyle,
+            ]}
           >
             <View className="px-4 pb-4" onLayout={handleExpandedBodyLayout}>
             {errorMessage ? (
               <Text
-                className="mb-2 ml-8 font-regular text-label-sm"
-                style={{ color: secondaryTextColor }}
+                className="mb-2 font-regular text-label-sm"
+                style={{ color: secondaryTextColor, marginLeft: bodyContentInsetLeft }}
               >
                 {errorMessage}
               </Text>
             ) : null}
 
-            <View className="relative ml-8 min-h-[36px]">
+            <Pressable
+              className="relative min-h-[42px] py-1"
+              style={{ marginLeft: bodyContentInsetLeft }}
+              onPress={(event) => {
+                event.stopPropagation();
+                focusNotesInput();
+              }}
+            >
               {!notes.trim() && !isNotesFocused ? (
                 <Text
                   variant="labelSm"
                   pointerEvents="none"
-                  className="absolute left-0 top-2 z-10"
+                  className="absolute left-0 top-3 z-10"
                   style={{ color: secondaryTextColor }}
                 >
                   Notes
                 </Text>
               ) : null}
               <AppTextInput
+                ref={notesInputRef}
                 value={notes}
                 onChangeText={setNotes}
                 onFocus={() => {
-                  collapseChecklist();
+                  closeChecklistComposer();
                   setIsNotesFocused(true);
                 }}
                 onBlur={() => setIsNotesFocused(false)}
@@ -1017,8 +1152,8 @@ export default function InlineTodoAccordion({
                   height: notesInputHeight,
                   backgroundColor: "transparent",
                   paddingHorizontal: 0,
-                  paddingTop: 6,
-                  paddingBottom: 6,
+                  paddingTop: 8,
+                  paddingBottom: 8,
                   color: primaryTextColor,
                 }}
                 selectionColor={selectionColor}
@@ -1026,216 +1161,211 @@ export default function InlineTodoAccordion({
                 scrollEnabled={false}
                 textAlignVertical="top"
               />
-            </View>
+            </Pressable>
 
             {shouldRenderChecklist ? (
               <Pressable
-                className="ml-8 mt-1"
+                className="mt-2"
+                style={{ marginLeft: bodyContentInsetLeft }}
                 onPress={(event) => {
                   event.stopPropagation();
-                  setIsChecklistVisible(true);
                 }}
               >
-                <View className="rounded-xl py-0.5">
-                  {visibleChecklistItems.map((item, index) => {
-                    const isLastItem = index === visibleChecklistItems.length - 1;
+                {visibleChecklistItems.map((item) => {
+                  const isChecklistItemCompleted = completedChecklistItemIds.includes(
+                    item.id,
+                  );
+                  const separatorStyle = {
+                    borderColor: inputBorderColor,
+                    borderBottomWidth: 0.5,
+                    borderTopWidth: 0,
+                  };
+
+                  if (editingChecklistItemId === item.id && !isChecklistComposerOpen) {
                     return (
-                      <React.Fragment key={item.id}>
-                        <View
-                          style={{
-                            height: 0.5,
-                            marginHorizontal: 4,
-                            backgroundColor: inputBorderColor,
-                          }}
-                        />
-                        {editingChecklistItemId === item.id ? (
+                      <View
+                        key={item.id}
+                        className="mx-1 flex-row items-center rounded-xl px-4 py-2"
+                        style={{
+                          ...separatorStyle,
+                          backgroundColor: checklistActiveBg,
+                        }}
+                      >
+                        <View className="h-5 w-5 items-center justify-center">
                           <View
-                            className="-mx-1 flex-row items-center rounded-xl px-4 py-2"
+                            className="h-[12px] w-[12px] rounded-full"
                             style={{
-                              backgroundColor: checklistActiveBg,
-                            }}
-                          >
-                            <View
-                              className="h-[10px] w-[10px] rounded-full"
-                              style={{
-                                borderWidth: 1,
-                                borderColor: checklistDotColor,
-                                backgroundColor: "transparent",
-                              }}
-                            />
-                            <AppTextInput
-                              ref={(input) => {
-                                checklistItemInputRefs.current[item.id] = input;
-                              }}
-                              autoFocus
-                              value={editingChecklistText}
-                              onChangeText={(nextText) => {
-                                const previousText = editingChecklistTextRef.current;
-                                editingChecklistTextRef.current = nextText;
-                                setEditingChecklistText(nextText);
-                                setChecklistItemText(item.id, nextText);
-                                if (nextText.length === 0) {
-                                  if (previousText.length === 0) {
-                                    armedDeleteChecklistItemIdRef.current = item.id;
-                                    setArmedDeleteChecklistItemId(item.id);
-                                  } else {
-                                    armedDeleteChecklistItemIdRef.current = item.id;
-                                    setArmedDeleteChecklistItemId(item.id);
-                                  }
-                                  return;
-                                }
-
-                                armedDeleteChecklistItemIdRef.current = null;
-                                setArmedDeleteChecklistItemId(null);
-                              }}
-                              onKeyPress={(event) => {
-                                if (event.nativeEvent.key !== "Backspace") {
-                                  return;
-                                }
-                                const currentItemText =
-                                  checklistItemsRef.current.find(
-                                    (entry) => entry.id === item.id,
-                                  )?.text ?? "";
-                                if (currentItemText.length > 0) {
-                                  return;
-                                }
-
-                                if (armedDeleteChecklistItemIdRef.current === item.id) {
-                                  removeChecklistItem(item.id);
-                                } else {
-                                  armedDeleteChecklistItemIdRef.current = item.id;
-                                  setArmedDeleteChecklistItemId(item.id);
-                                }
-                              }}
-                              onFocus={handleChecklistInputFocus}
-                              onBlur={() => {
-                                if (skipChecklistBlurForItemIdRef.current === item.id) {
-                                  skipChecklistBlurForItemIdRef.current = null;
-                                  return;
-                                }
-
-                                if (isCollapsingChecklistRef.current) {
-                                  return;
-                                }
-
-                                if (editingChecklistItemId === item.id) {
-                                  clearChecklistEditingState();
-                                }
-                                setIsChecklistSurfaceActive(false);
-                              }}
-                              onSubmitEditing={() => {
-                                const currentItemText =
-                                  checklistItemsRef.current.find(
-                                    (entry) => entry.id === item.id,
-                                  )?.text ?? "";
-                                if (currentItemText.trim().length === 0) {
-                                  armedDeleteChecklistItemIdRef.current = item.id;
-                                  setArmedDeleteChecklistItemId(item.id);
-                                  return;
-                                }
-
-                                skipChecklistBlurForItemIdRef.current = item.id;
-                                setIsChecklistVisible(true);
-                                setIsChecklistSurfaceActive(true);
-                                clearChecklistEditingState();
-                                requestAnimationFrame(() => {
-                                  focusChecklistDraftWithRetry();
-                                });
-                              }}
-                              placeholder="Checklist"
-                              placeholderTextColor={secondaryTextColor}
-                              variant="labelSm"
-                              className="ml-2 flex-1"
-                              style={{
-                                color: primaryTextColor,
-                                paddingVertical: 0,
-                                paddingHorizontal: 0,
-                                margin: 0,
-                              }}
-                              returnKeyType="done"
-                              blurOnSubmit={false}
-                            />
-                          </View>
-                        ) : (
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            className="-mx-1 flex-row items-center px-4 py-2"
-                            onPress={(event) => {
-                              event.stopPropagation();
-                              handleChecklistRowPress(item);
-                            }}
-                          >
-                            <View
-                              className="h-[10px] w-[10px] rounded-full"
-                              style={{
-                                borderWidth: 1,
-                                borderColor: checklistDotColor,
-                                backgroundColor: "transparent",
-                              }}
-                            />
-                            <Text
-                              variant="labelSm"
-                              className="ml-2 flex-1"
-                              style={{ color: primaryTextColor }}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
-                            >
-                              {item.text}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                        {isLastItem ? (
-                          <View
-                            style={{
-                              height: 0.5,
-                              marginHorizontal: 4,
-                              backgroundColor: inputBorderColor,
+                              borderWidth: 1,
+                              borderColor: checklistDotColor,
+                              backgroundColor: "transparent",
                             }}
                           />
-                        ) : null}
-                      </React.Fragment>
-                    );
-                  })}
+                        </View>
+                        <View className="ml-2 flex-1 py-1">
+                          <AppTextInput
+                            ref={(input) => {
+                              checklistItemInputRefs.current[item.id] = input;
+                            }}
+                            autoFocus
+                            value={editingChecklistText}
+                            onChangeText={(nextText) =>
+                              handleChecklistItemTextChange(item.id, nextText)
+                            }
+                            onKeyPress={(event) => {
+                              if (event.nativeEvent.key !== "Backspace") {
+                                return;
+                              }
 
-                  {showChecklistComposer ? (
+                              const currentItemText =
+                                checklistItemsRef.current.find(
+                                  (entry) => entry.id === item.id,
+                                )?.text ?? "";
+
+                              if (currentItemText.length > 0) {
+                                return;
+                              }
+
+                              removeChecklistItem(item.id);
+                            }}
+                            onBlur={() => {
+                              if (skipChecklistBlurForItemIdRef.current === item.id) {
+                                skipChecklistBlurForItemIdRef.current = null;
+                                return;
+                              }
+
+                              if (editingChecklistItemId === item.id) {
+                                finalizeChecklistEditingOnBlur(item.id);
+                              }
+                            }}
+                            onSubmitEditing={() => {
+                              if (!editingChecklistText.trim().length) {
+                                commitChecklistEditing(item.id);
+                                return;
+                              }
+
+                              commitChecklistEditing(item.id);
+                              setIsChecklistComposerOpen(true);
+                              requestAnimationFrame(() => {
+                                focusChecklistDraftWithRetry();
+                              });
+                            }}
+                            placeholder="Checklist"
+                            placeholderTextColor={secondaryTextColor}
+                            variant="labelSm"
+                            className="flex-1"
+                            style={{
+                              color: primaryTextColor,
+                              paddingVertical: 0,
+                              paddingHorizontal: 0,
+                              margin: 0,
+                            }}
+                            returnKeyType="done"
+                            blurOnSubmit={false}
+                          />
+                        </View>
+                      </View>
+                    );
+                  }
+
+                  return (
                     <View
-                      className="-mx-1 flex-row items-center rounded-xl px-4 py-2"
-                      style={{ backgroundColor: checklistActiveBg }}
+                      key={item.id}
+                      className="mx-1 flex-row items-center rounded-xl px-4 py-2"
+                      style={separatorStyle}
                     >
+                      <TouchableOpacity
+                        activeOpacity={0.75}
+                        className="h-5 w-5 items-center justify-center"
+                        onPress={() => handleChecklistCompleteToggle(item.id)}
+                      >
+                        {isChecklistItemCompleted ? (
+                          <Icon
+                            name="check"
+                            size={11}
+                            color={checklistCheckColor}
+                            weight="bold"
+                          />
+                        ) : (
+                          <View
+                            className="h-[12px] w-[12px] rounded-full"
+                            style={{
+                              borderWidth: 1,
+                              borderColor: checklistDotColor,
+                              backgroundColor: "transparent",
+                            }}
+                          />
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        className="ml-2 flex-1 py-1"
+                        onPress={() => handleChecklistRowPress(item)}
+                      >
+                        <Text
+                          variant="labelSm"
+                          className="flex-1"
+                          style={{
+                            color: isChecklistItemCompleted
+                              ? checklistCompletedTextColor
+                              : primaryTextColor,
+                          }}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {item.text}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+
+                {showChecklistComposer ? (
+                  <View
+                    className="mx-1 flex-row items-center rounded-xl px-4 py-2"
+                    style={{
+                      borderColor: inputBorderColor,
+                      borderBottomWidth: 0.5,
+                      borderTopWidth: 0,
+                      backgroundColor: checklistActiveBg,
+                    }}
+                  >
+                    <View className="h-5 w-5 items-center justify-center">
                       <View
-                        className="h-[10px] w-[10px] rounded-full"
+                        className="h-[12px] w-[12px] rounded-full"
                         style={{
                           borderWidth: 1,
                           borderColor: checklistDotColor,
                           backgroundColor: "transparent",
                         }}
                       />
+                    </View>
+                    <View className="ml-2 flex-1 py-1">
                       <AppTextInput
                         ref={checklistDraftInputRef}
-                        autoFocus={showChecklistComposer}
+                        autoFocus={isChecklistComposerOpen}
                         value={checklistDraft}
                         onChangeText={setChecklistDraft}
+                        onFocus={() => {
+                          clearChecklistEditingState();
+                        }}
                         onKeyPress={(event) => {
                           if (event.nativeEvent.key !== "Backspace") {
                             return;
                           }
-                          handleChecklistDraftBackspace();
-                        }}
-                        onFocus={handleChecklistInputFocus}
-                        onBlur={() => {
-                          setIsChecklistSurfaceActive(false);
-                          if (
-                            checklistItemsRef.current.length === 0 &&
-                            checklistDraft.trim().length === 0
-                          ) {
-                            setIsChecklistVisible(false);
+                          if (checklistDraft.length === 0) {
+                            setIsChecklistComposerOpen(false);
+                            clearChecklistEditingState();
+                            setIsChecklistVisible(checklistItemsRef.current.length > 0);
                           }
+                        }}
+                        onBlur={() => {
+                          closeChecklistComposer();
                         }}
                         onSubmitEditing={handleSubmitChecklistDraft}
                         placeholder="Checklist"
                         placeholderTextColor={secondaryTextColor}
                         variant="labelSm"
-                        className="ml-2 flex-1"
+                        className="flex-1"
                         style={{
                           color: primaryTextColor,
                           paddingVertical: 0,
@@ -1246,21 +1376,21 @@ export default function InlineTodoAccordion({
                         blurOnSubmit={false}
                       />
                     </View>
-                  ) : null}
-                </View>
+                  </View>
+                ) : null}
               </Pressable>
             ) : null}
 
             <View className={metadataRowClassName}>
               <View className={metadataDetailsClassName}>
-                {selectedTagDisplay ? (
+                {selectedClientDisplay ? (
                   <TouchableOpacity
                     activeOpacity={0.72}
-                    className="min-w-0 flex-row items-center"
-                    onPress={() => handleToolbarIconPress()}
+                    className="min-w-0 flex-row items-center pr-[10px] py-1"
+                    onPress={openClientsModal}
                   >
                     <Icon
-                      name="tag"
+                      name="client"
                       size={16}
                       color={secondaryTextColor}
                       weight="light"
@@ -1272,7 +1402,7 @@ export default function InlineTodoAccordion({
                       numberOfLines={1}
                       ellipsizeMode="tail"
                     >
-                      {selectedTagDisplay.label}
+                      {selectedClientDisplay.label}
                     </Text>
                   </TouchableOpacity>
                 ) : null}
@@ -1280,7 +1410,9 @@ export default function InlineTodoAccordion({
                 {selectedWhenDisplay ? (
                   <TouchableOpacity
                     activeOpacity={0.72}
-                    className="min-w-0 flex-row items-center pr-[10px] py-1"
+                    className={`min-w-0 flex-row items-center pr-[10px] py-1 ${
+                      selectedClientDisplay ? "mt-2" : ""
+                    }`}
                     onPress={() => setIsWhenModalOpen(true)}
                   >
                     {selectedWhenDisplay.showIcon ? (
@@ -1309,7 +1441,7 @@ export default function InlineTodoAccordion({
                   <TouchableOpacity
                     activeOpacity={0.72}
                     className={`min-w-0 flex-row items-center pr-[10px] py-1 ${
-                      selectedWhenDisplay ? "mt-2" : ""
+                      selectedWhenDisplay || selectedClientDisplay ? "mt-2" : ""
                     }`}
                     onPress={() => setIsDeadlineModalOpen(true)}
                   >
@@ -1353,13 +1485,20 @@ export default function InlineTodoAccordion({
                     />
                   </TouchableOpacity>
                 ) : null}
-                <TouchableOpacity
-                  className="ml-2 h-8 w-8 items-center justify-center"
-                  activeOpacity={0.72}
-                  onPress={() => handleToolbarIconPress()}
-                >
-                  <Icon name="tag" size={18} color={secondaryTextColor} weight="light" />
-                </TouchableOpacity>
+                {!selectedClientDisplay ? (
+                  <TouchableOpacity
+                    className="ml-2 h-8 w-8 items-center justify-center"
+                    activeOpacity={0.72}
+                    onPress={openClientsModal}
+                  >
+                    <Icon
+                      name="client"
+                      size={18}
+                      color={secondaryTextColor}
+                      weight="light"
+                    />
+                  </TouchableOpacity>
+                ) : null}
                 {!shouldRenderChecklist ? (
                   <TouchableOpacity
                     className="ml-2 h-8 w-8 items-center justify-center"
