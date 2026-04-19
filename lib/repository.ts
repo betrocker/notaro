@@ -3,6 +3,7 @@ import { assertSupabaseConfigured } from "./supabase";
 
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
 type ClientRow = Database["public"]["Tables"]["clients"]["Row"];
+type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
 type LegacyProjectRow = ProjectRow & {
   title?: string | null;
   description?: string | null;
@@ -205,16 +206,51 @@ function toDateOnlyIso(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeChecklistItems(
+export type ChecklistStateItem = {
+  text: string;
+  completed: boolean;
+};
+
+function normalizeChecklistStateItems(
   checklistItems: Array<unknown> | null | undefined,
 ) {
   if (!checklistItems?.length) {
-    return [] as string[];
+    return [] as ChecklistStateItem[];
   }
 
   return checklistItems
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => item.length > 0);
+    .map((item) => {
+      if (typeof item === "string") {
+        const text = item.trim();
+        if (!text.length) {
+          return null;
+        }
+        return { text, completed: false } satisfies ChecklistStateItem;
+      }
+
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+
+      const textValue =
+        "text" in item && typeof item.text === "string" ? item.text.trim() : "";
+      if (!textValue.length) {
+        return null;
+      }
+
+      const completedValue = "completed" in item && item.completed === true;
+      return {
+        text: textValue,
+        completed: completedValue,
+      } satisfies ChecklistStateItem;
+    })
+    .filter((item): item is ChecklistStateItem => Boolean(item));
+}
+
+function normalizeChecklistItems(
+  checklistItems: Array<unknown> | null | undefined,
+) {
+  return normalizeChecklistStateItems(checklistItems).map((item) => item.text);
 }
 
 export async function fetchHomeData(): Promise<HomeData> {
@@ -307,6 +343,17 @@ export type JobsListItem = {
   created_at: string | null;
 };
 
+export type PaymentJobOption = {
+  id: string;
+  title: string | null;
+  client_id: string | null;
+  client_name: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+};
+
+export type JobPayment = Pick<PaymentRow, "id" | "amount" | "note" | "payment_date">;
+
 export async function fetchJobsList(): Promise<JobsListItem[]> {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
@@ -329,12 +376,41 @@ export async function fetchJobsList(): Promise<JobsListItem[]> {
   return result.data;
 }
 
+export async function fetchPaymentJobs(): Promise<PaymentJobOption[]> {
+  const { supabase, user } = await requireCurrentUser();
+  const userId = user.id;
+  const [jobsResult, clientsData] = await Promise.all([
+    supabase
+      .from("jobs")
+      .select("id, title, client_id, created_at, completed_at")
+      .eq("user_id", userId)
+      .is("archived_at", null)
+      .order("created_at", { ascending: false }),
+    fetchMergedClientsForUser(userId),
+  ]);
+
+  if (jobsResult.error) {
+    throw jobsResult.error;
+  }
+
+  const clientNameById = new Map(
+    clientsData.map((client) => [client.id, client.name ?? null]),
+  );
+
+  return jobsResult.data.map((job) => ({
+    ...job,
+    client_name: job.client_id ? (clientNameById.get(job.client_id) ?? null) : null,
+  }));
+}
+
 export type JobDetail = JobsListItem & {
   checklist_items: string[];
+  checklist_state_items: ChecklistStateItem[];
   price: number | null;
   completed_at: string | null;
   archived_at: string | null;
   client_name: string | null;
+  payments: JobPayment[];
 };
 
 export async function fetchJobById(jobId: string): Promise<JobDetail> {
@@ -357,9 +433,21 @@ export async function fetchJobById(jobId: string): Promise<JobDetail> {
     throw new Error("Posao nije pronadjen.");
   }
 
+  const [paymentsResult, clientsData] = await Promise.all([
+    supabase
+      .from("payments")
+      .select("id, amount, note, payment_date")
+      .eq("job_id", jobId)
+      .order("payment_date", { ascending: false, nullsFirst: false }),
+    result.data.client_id ? fetchMergedClientsForUser(userId) : Promise.resolve([]),
+  ]);
+
+  if (paymentsResult.error) {
+    throw paymentsResult.error;
+  }
+
   let clientName: string | null = null;
   if (result.data.client_id) {
-    const clientsData = await fetchMergedClientsForUser(userId);
     clientName =
       clientsData.find((client) => client.id === result.data?.client_id)?.name ??
       null;
@@ -367,10 +455,14 @@ export async function fetchJobById(jobId: string): Promise<JobDetail> {
 
   return {
     ...result.data,
+    checklist_state_items: normalizeChecklistStateItems(
+      Array.isArray(result.data.checklist_items) ? result.data.checklist_items : [],
+    ),
     checklist_items: normalizeChecklistItems(
       Array.isArray(result.data.checklist_items) ? result.data.checklist_items : [],
     ),
     client_name: clientName,
+    payments: paymentsResult.data ?? [],
   };
 }
 
@@ -543,20 +635,23 @@ export async function createTodo(input: {
   title: string;
   notes?: string;
   projectId?: string | null;
+  price?: number | null;
   scheduledDate?: Date | null;
   deadlineDate?: Date | null;
   checklistItems?: string[];
-  status?: "new" | "someday";
+  status?: "new" | "someday" | "in_progress" | "waiting" | "blocked";
 }) {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
-  const normalizedStatus = input.status === "someday" ? "someday" : null;
+  const normalizedStatus =
+    !input.status || input.status === "new" ? null : input.status;
 
   const result = await supabase
     .from("jobs")
     .insert({
       title: input.title,
       description: input.notes?.trim() || null,
+      price: input.price ?? null,
       deadline_date: input.deadlineDate ? toDateOnlyIso(input.deadlineDate) : null,
       checklist_items: normalizeChecklistItems(input.checklistItems),
       client_id: input.projectId ?? null,
@@ -565,7 +660,7 @@ export async function createTodo(input: {
       user_id: userId,
     })
     .select(
-      "id, title, description, client_id, status, scheduled_date, deadline_date, checklist_items, created_at",
+      "id, title, description, client_id, status, scheduled_date, deadline_date, checklist_items, price, created_at",
     )
     .single();
 
@@ -785,36 +880,128 @@ export async function deleteClient(clientId: string) {
   }
 }
 
-export async function createProject(title: string) {
+export async function createProject(
+  input: string | { title: string; note?: string | null },
+) {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
+  const rawTitle = typeof input === "string" ? input : input.title;
+  const rawNote = typeof input === "string" ? null : input.note;
+  const normalizedTitle = rawTitle.trim();
+  const normalizedNote = rawNote?.trim() || null;
 
-  const normalizedTitle = title.trim();
-  const insertByNameResult = await supabase
-    .from("projects")
-    .insert({ name: normalizedTitle, user_id: userId })
-    .select("*")
-    .single();
+  if (!normalizedTitle) {
+    throw new Error("Naziv projekta je obavezan.");
+  }
 
-  if (insertByNameResult.error && isMissingColumnError(insertByNameResult.error, "name")) {
+  const insertByTitle = async () => {
     const insertByTitleResult = await supabase
       .from("projects")
-      .insert({ title: normalizedTitle, user_id: userId } as never)
+      .insert({
+        title: normalizedTitle,
+        description: normalizedNote,
+        user_id: userId,
+      } as never)
       .select("*")
       .single();
+
+    if (insertByTitleResult.error && isMissingColumnError(insertByTitleResult.error, "description")) {
+      const insertByTitleWithoutDescriptionResult = await supabase
+        .from("projects")
+        .insert({
+          title: normalizedTitle,
+          user_id: userId,
+        } as never)
+        .select("*")
+        .single();
+
+      if (insertByTitleWithoutDescriptionResult.error) {
+        throw new Error(
+          `Nisam uspeo da sacuvam projekat: ${insertByTitleWithoutDescriptionResult.error.message}`,
+        );
+      }
+
+      return normalizeProjectRow(insertByTitleWithoutDescriptionResult.data as LegacyProjectRow);
+    }
 
     if (insertByTitleResult.error) {
       throw new Error(`Nisam uspeo da sacuvam projekat: ${insertByTitleResult.error.message}`);
     }
 
     return normalizeProjectRow(insertByTitleResult.data as LegacyProjectRow);
+  };
+
+  const insertByNameResult = await supabase
+    .from("projects")
+    .insert({ name: normalizedTitle, note: normalizedNote, user_id: userId })
+    .select("*")
+    .single();
+
+  if (!insertByNameResult.error) {
+    return normalizeProjectRow(insertByNameResult.data as LegacyProjectRow);
   }
 
-  if (insertByNameResult.error) {
-    throw new Error(`Nisam uspeo da sacuvam projekat: ${insertByNameResult.error.message}`);
+  if (isMissingColumnError(insertByNameResult.error, "note")) {
+    const insertByNameWithoutNoteResult = await supabase
+      .from("projects")
+      .insert({ name: normalizedTitle, user_id: userId })
+      .select("*")
+      .single();
+
+    if (!insertByNameWithoutNoteResult.error) {
+      return normalizeProjectRow(insertByNameWithoutNoteResult.data as LegacyProjectRow);
+    }
+
+    if (isMissingColumnError(insertByNameWithoutNoteResult.error, "name")) {
+      return insertByTitle();
+    }
+
+    throw new Error(
+      `Nisam uspeo da sacuvam projekat: ${insertByNameWithoutNoteResult.error.message}`,
+    );
   }
 
-  return normalizeProjectRow(insertByNameResult.data as LegacyProjectRow);
+  if (isMissingColumnError(insertByNameResult.error, "name")) {
+    return insertByTitle();
+  }
+
+  throw new Error(`Nisam uspeo da sacuvam projekat: ${insertByNameResult.error.message}`);
+}
+
+export async function createPayment(input: {
+  amount: number;
+  note?: string | null;
+  paymentDate?: Date | null;
+  jobId?: string | null;
+}) {
+  const { supabase } = await requireCurrentUser();
+  const normalizedAmount = Number(input.amount);
+  const normalizedNote = input.note?.trim() || null;
+  const normalizedDate = input.paymentDate ? toDateOnlyIso(input.paymentDate) : null;
+
+  if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+    throw new Error("Iznos mora biti veci od 0.");
+  }
+  if (!input.jobId) {
+    throw new Error("Posao je obavezan za uplatu.");
+  }
+
+  const result = await supabase
+    .from("payments")
+    .insert({
+      amount: normalizedAmount,
+      note: normalizedNote,
+      payment_date: normalizedDate,
+      job_id: input.jobId,
+    })
+    .select("*")
+    .single();
+
+  if (result.error) {
+    throw new Error(`Nisam uspeo da sacuvam uplatu: ${result.error.message}`);
+  }
+
+  return result.data as PaymentRow;
 }
 
 export async function completeInboxTodo(jobId: string) {
@@ -872,8 +1059,16 @@ export async function updateInboxTodo(
     description?: string | null;
     scheduledDateIso?: string | null;
     deadlineDateIso?: string | null;
+    price?: number | null;
     checklistItems?: string[] | null;
-    status?: "new" | "someday" | null;
+    checklistStateItems?: ChecklistStateItem[] | null;
+    status?:
+      | "new"
+      | "someday"
+      | "in_progress"
+      | "waiting"
+      | "blocked"
+      | null;
   },
 ) {
   const { supabase, user } = await requireCurrentUser();
@@ -894,13 +1089,26 @@ export async function updateInboxTodo(
     updatePayload.deadline_date = input.deadlineDateIso;
   }
 
+  if (input.price !== undefined) {
+    updatePayload.price = input.price;
+  }
+
   if (input.checklistItems !== undefined) {
     updatePayload.checklist_items = normalizeChecklistItems(input.checklistItems);
   }
 
+  if (input.checklistStateItems !== undefined) {
+    updatePayload.checklist_items = normalizeChecklistStateItems(
+      input.checklistStateItems,
+    ).map((item) => ({
+      text: item.text,
+      completed: item.completed,
+    }));
+  }
+
   if (input.status !== undefined) {
     updatePayload.status =
-      input.status === "someday" ? "someday" : null;
+      input.status === null || input.status === "new" ? null : input.status;
   }
 
   const result = await supabase

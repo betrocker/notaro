@@ -1,22 +1,42 @@
-import { Icon } from "@/components/Icon";
+import { Icon, LIST_ICON_COLORS } from "@/components/Icon";
+import { ModalCircleButton } from "@/components/ModalCircleButton";
 import ProjectHeader from "@/components/ProjectHeader";
 import ProjectMenu, { type ProjectMenuAction } from "@/components/ProjectMenu";
+import { TransparentModalShell } from "@/components/TransparentModalShell";
 import WhenCalendarModal from "@/components/WhenCalendarModal";
 import { AppText as Text, AppTextInput } from "@/components/ui";
-import { COLOR_TOKENS } from "@/lib/design-system/tokens";
+import { BlurView } from "expo-blur";
+import {
+  BORDER_WIDTH_TOKENS,
+  COLOR_TOKENS,
+  RADIUS_TOKENS,
+  SHADOW_TOKENS,
+  SIZE_TOKENS,
+  SPACING_TOKENS,
+} from "@/lib/design-system/tokens";
 import {
   completeInboxTodo,
   deleteInboxTodo,
   fetchJobById,
   JobDetail,
+  type ChecklistStateItem,
   updateInboxTodo,
 } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { getThemeTokens } from "@/lib/theme";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { TextInput as RNTextInput, TouchableOpacity, View } from "react-native";
+import {
+  Modal,
+  Platform,
+  Pressable,
+  StyleSheet,
+  TextInput as RNTextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import Animated, {
   Extrapolation,
   FadeIn,
@@ -98,6 +118,49 @@ function formatDaysUntilLabel(targetDate: Date) {
   return `${daysUntil} days left`;
 }
 
+function formatPriceLabel(price: number | null | undefined) {
+  if (price === null || price === undefined || !Number.isFinite(price)) {
+    return null;
+  }
+
+  const rounded = Math.round(price * 100) / 100;
+  const hasDecimals = Math.abs(rounded % 1) > 0.000001;
+  const formatted = new Intl.NumberFormat("sr-RS", {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0,
+  }).format(rounded);
+
+  return `${formatted} RSD`;
+}
+
+function parsePriceInputValue(rawValue: string): number | null {
+  const normalized = rawValue
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(",", ".")
+    .replace(/[^\d.]/g, "");
+
+  if (!normalized.length) {
+    return null;
+  }
+
+  const decimalSeparatorCount = (normalized.match(/\./g) ?? []).length;
+  if (decimalSeparatorCount > 1) {
+    throw new Error("Unesi ispravnu cenu.");
+  }
+
+  const parsed = Number.parseFloat(normalized);
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Unesi ispravnu cenu.");
+  }
+
+  if (parsed < 0) {
+    throw new Error("Cena ne moze biti negativna.");
+  }
+
+  return Math.round(parsed * 100) / 100;
+}
+
 function parseDateOnly(dateIso: string | null | undefined) {
   if (!dateIso) {
     return null;
@@ -109,6 +172,21 @@ function parseDateOnly(dateIso: string | null | undefined) {
   }
 
   return date;
+}
+
+function formatPaymentDateLabel(dateIso: string | null | undefined) {
+  const date = parseDateOnly(dateIso);
+  if (!date) {
+    return "today";
+  }
+
+  if (getDaysUntilDate(date) === 0) {
+    return "today";
+  }
+
+  const day = date.getDate();
+  const month = date.getMonth() + 1;
+  return `${day}. ${month}.`;
 }
 
 function toDateOnlyIso(date: Date) {
@@ -126,17 +204,44 @@ type ChecklistItem = {
   text: string;
 };
 
+type JobStatus = "new" | "in_progress" | "waiting" | "blocked" | "someday";
+
+function normalizeJobStatus(status: string | null | undefined): JobStatus {
+  if (status === "in_progress" || status === "waiting" || status === "blocked") {
+    return status;
+  }
+
+  if (status === "someday") {
+    return "someday";
+  }
+
+  return "new";
+}
+
 function createChecklistItemId() {
   return `check-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function areStringArraysEqual(left: string[], right: string[]) {
+function areChecklistStateItemsEqual(
+  left: ChecklistStateItem[],
+  right: ChecklistStateItem[],
+) {
   if (left.length !== right.length) {
     return false;
   }
 
   for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
+    const leftItem = left[index];
+    const rightItem = right[index];
+
+    if (!leftItem || !rightItem) {
+      return false;
+    }
+
+    if (
+      leftItem.text !== rightItem.text ||
+      leftItem.completed !== rightItem.completed
+    ) {
       return false;
     }
   }
@@ -144,10 +249,37 @@ function areStringArraysEqual(left: string[], right: string[]) {
   return true;
 }
 
+function normalizeCompletedIdsForItems(items: ChecklistItem[], completedIds: string[]) {
+  const existingIds = new Set(items.map((item) => item.id));
+  return completedIds.filter((itemId) => existingIds.has(itemId));
+}
+
+function buildChecklistStateItems(
+  items: ChecklistItem[],
+  completedIds: string[],
+) {
+  const completedIdSet = new Set(completedIds);
+
+  return items
+    .map((item) => {
+      const text = item.text.trim();
+      if (!text.length) {
+        return null;
+      }
+      return {
+        text,
+        completed: completedIdSet.has(item.id),
+      } satisfies ChecklistStateItem;
+    })
+    .filter((item): item is ChecklistStateItem => Boolean(item));
+}
+
 export default function JobDetailScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { colorScheme } = useColorScheme();
   const colorMode = colorScheme === "dark" ? "dark" : "light";
+  const isDark = colorMode === "dark";
+  const theme = useMemo(() => getThemeTokens(isDark), [isDark]);
   const [job, setJob] = useState<JobDetail | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
@@ -155,7 +287,9 @@ export default function JobDetailScreen() {
   const [isNotesFocused, setIsNotesFocused] = useState(false);
   const [notesInputHeight, setNotesInputHeight] = useState(NOTES_MIN_HEIGHT);
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
-  const [savedChecklistItems, setSavedChecklistItems] = useState<string[]>([]);
+  const [savedChecklistStateItems, setSavedChecklistStateItems] = useState<
+    ChecklistStateItem[]
+  >([]);
   const [completedChecklistItemIds, setCompletedChecklistItemIds] = useState<
     string[]
   >([]);
@@ -173,6 +307,10 @@ export default function JobDetailScreen() {
   );
   const [isWhenModalOpen, setIsWhenModalOpen] = useState(false);
   const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
+  const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
+  const [priceDraft, setPriceDraft] = useState("");
+  const [isPriceInputFocused, setIsPriceInputFocused] = useState(false);
   const scrollY = useSharedValue(0);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const primaryTextColor = COLOR_TOKENS[colorMode]["text.primary"];
@@ -181,6 +319,47 @@ export default function JobDetailScreen() {
   const selectionColor = COLOR_TOKENS[colorMode]["primary.default"];
   const titleMenuIconColor = COLOR_TOKENS[colorMode]["text.secondary"];
   const titleMenuActiveBg = COLOR_TOKENS[colorMode]["bg.input"];
+  const statusModalBg = COLOR_TOKENS[colorMode]["bg.popup"];
+  const statusModalBorderColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.42 : 0.24,
+  );
+  const statusModalDividerColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.34 : 0.18,
+  );
+  const statusModalWindowShadow = Platform.select({
+    ios: {
+      ...SHADOW_TOKENS.card.ios,
+    },
+    android: {
+      elevation: SHADOW_TOKENS.card.android.elevation,
+    },
+    default: {},
+  });
+  const actionButtonBorder = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    isDark ? 0.34 : 0.28,
+  );
+  const actionButtonHighlight = isDark
+    ? "rgba(0, 0, 0, 0.24)"
+    : "rgba(0, 0, 0, 0.08)";
+  const actionButtonText = COLOR_TOKENS[colorMode]["text.primary"];
+  const blurMethod =
+    Platform.OS === "android"
+      ? ("dimezisBlurView" as const)
+      : undefined;
+  const authFieldBg = isDark
+    ? COLOR_TOKENS.dark["btn.secondary"]
+    : COLOR_TOKENS.light["bg.input"];
+  const authInputLabelColor = theme.onboardingTitle;
+  const authFocusBorderColor = COLOR_TOKENS[colorMode]["primary.soft"];
+  const authPlaceholderColor = COLOR_TOKENS[colorMode]["text.secondary"];
+  const authIdleBorderColor = authPlaceholderColor;
+  const authFieldHeight = SPACING_TOKENS["4xl"];
+  const authControlRadius = RADIUS_TOKENS.control;
+  const authFocusBorderWidth = BORDER_WIDTH_TOKENS.focus;
+  const authSubtleBorderWidth = BORDER_WIDTH_TOKENS.subtle;
   const metadataSeparatorColor = withOpacity(
     COLOR_TOKENS[colorMode]["text.secondary"],
     0.24,
@@ -191,10 +370,44 @@ export default function JobDetailScreen() {
   const checklistDotColor = subheaderColor;
   const checklistCheckColor = secondaryTextColor;
   const checklistCompletedTextColor = withOpacity(primaryTextColor, 0.58);
+  const paymentAccentColor = COLOR_TOKENS[colorMode]["primary.soft"];
+  const paymentCheckIconColor = COLOR_TOKENS.light["text.primary"];
+  const emptySectionEmbossTextStyle = {
+    color: withOpacity(primaryTextColor, colorMode === "dark" ? 0.26 : 0.22),
+    textShadowColor:
+      colorMode === "dark" ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.72)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 0,
+  } as const;
+
+  const statusColorByKey = useMemo<Record<JobStatus, string>>(
+    () => ({
+      new: COLOR_TOKENS[colorMode]["primary.default"],
+      in_progress: LIST_ICON_COLORS["--color-upcoming"],
+      waiting: "#F2B24A",
+      blocked: "#D15B52",
+      someday: LIST_ICON_COLORS["--color-someday"],
+    }),
+    [colorMode],
+  );
+
+  const statusOptions = useMemo(
+    () =>
+      [
+        { key: "new", label: "To do" },
+        { key: "in_progress", label: "In progress" },
+        { key: "waiting", label: "Waiting" },
+        { key: "blocked", label: "Blocked" },
+        { key: "someday", label: "Someday" },
+      ] as const,
+    [],
+  );
   const checklistDraftInputRef = useRef<RNTextInput>(null);
   const checklistItemInputRefs = useRef<Record<string, RNTextInput | null>>({});
+  const priceInputRef = useRef<RNTextInput>(null);
+  const priceInputFocusTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const checklistItemsRef = useRef<ChecklistItem[]>([]);
-  const savedChecklistItemsRef = useRef<string[]>([]);
+  const savedChecklistStateItemsRef = useRef<ChecklistStateItem[]>([]);
   const skipChecklistBlurForItemIdRef = useRef<string | null>(null);
 
   const loadJob = useCallback(async () => {
@@ -241,26 +454,29 @@ export default function JobDetailScreen() {
   }, [checklistItems]);
 
   useEffect(() => {
-    savedChecklistItemsRef.current = savedChecklistItems;
-  }, [savedChecklistItems]);
+    savedChecklistStateItemsRef.current = savedChecklistStateItems;
+  }, [savedChecklistStateItems]);
 
   useEffect(() => {
-    const jobChecklist = job?.checklist_items ?? [];
-    const nextChecklistItems = jobChecklist.map((text) => ({
+    const jobChecklistState = job?.checklist_state_items ?? [];
+    const nextChecklistItems = jobChecklistState.map((item) => ({
       id: createChecklistItemId(),
-      text,
+      text: item.text,
     }));
+    const nextCompletedChecklistItemIds = nextChecklistItems
+      .filter((_, index) => jobChecklistState[index]?.completed)
+      .map((item) => item.id);
     setChecklistItems(nextChecklistItems);
-    setSavedChecklistItems(jobChecklist);
-    setCompletedChecklistItemIds([]);
+    setSavedChecklistStateItems(jobChecklistState);
+    setCompletedChecklistItemIds(nextCompletedChecklistItemIds);
     setChecklistDraft("");
-    setIsChecklistVisible(jobChecklist.length > 0);
+    setIsChecklistVisible(jobChecklistState.length > 0);
     setIsChecklistComposerOpen(false);
     setEditingChecklistItemId(null);
     setEditingChecklistText("");
     setEditingChecklistOriginalText("");
     skipChecklistBlurForItemIdRef.current = null;
-  }, [job?.id, job?.checklist_items]);
+  }, [job?.id, job?.checklist_state_items]);
 
   useEffect(() => {
     if (!isChecklistComposerOpen) {
@@ -339,6 +555,8 @@ export default function JobDetailScreen() {
 
   const scheduledDateObj = parseDateOnly(job?.scheduled_date);
   const deadlineDateObj = parseDateOnly(job?.deadline_date);
+  const currentJobStatus = normalizeJobStatus(job?.status);
+  const statusIndicatorFillColor = statusColorByKey[currentJobStatus];
   const scheduledDateLabel = scheduledDateObj
     ? formatSelectedDateLabel(scheduledDateObj)
     : null;
@@ -348,6 +566,21 @@ export default function JobDetailScreen() {
   const deadlineDaysLeftLabel = deadlineDateObj
     ? formatDaysUntilLabel(deadlineDateObj)
     : null;
+  const priceLabel = formatPriceLabel(job?.price);
+  const hasPriceValue = job?.price !== null && job?.price !== undefined;
+  const paidAmount = (job?.payments ?? []).reduce((sum, payment) => {
+    const amount = payment.amount;
+    if (!Number.isFinite(amount)) {
+      return sum;
+    }
+    return sum + (amount ?? 0);
+  }, 0);
+  const debtAmount = hasPriceValue
+    ? Math.max((job?.price ?? 0) - paidAmount, 0)
+    : null;
+  const debtPriceMetaLabel =
+    debtAmount === null ? "—" : (formatPriceLabel(debtAmount) ?? "0 RSD");
+  const metaIconColor = secondaryTextColor;
   const selectedWhenState: "none" | "date" | "today" | "someday" =
     scheduledDateObj ? "date" : job?.status === "someday" ? "someday" : "none";
 
@@ -382,11 +615,111 @@ export default function JobDetailScreen() {
     setIsDeadlineModalOpen(false);
   }, []);
 
+  const openStatusModal = useCallback(() => {
+    requestAnimationFrame(() => {
+      setIsStatusModalOpen(true);
+    });
+  }, []);
+
+  const closeStatusModal = useCallback(() => {
+    setIsStatusModalOpen(false);
+  }, []);
+
+  const openPriceModal = useCallback(() => {
+    setPriceDraft(job?.price !== null && job?.price !== undefined ? `${job.price}` : "");
+    setIsPriceInputFocused(false);
+    requestAnimationFrame(() => {
+      setIsPriceModalOpen(true);
+    });
+  }, [job?.price]);
+
+  const closePriceModal = useCallback(() => {
+    setIsPriceModalOpen(false);
+  }, []);
+
+  const openNewPaymentModal = useCallback(() => {
+    if (!job?.id) {
+      router.push("/new-payment");
+      return;
+    }
+
+    router.push({
+      pathname: "/new-payment",
+      params: {
+        jobId: job.id,
+      },
+    });
+  }, [job?.id]);
+
+  const clearPriceInputFocusTimers = useCallback(() => {
+    if (priceInputFocusTimeoutsRef.current.length === 0) {
+      return;
+    }
+
+    for (const timeoutId of priceInputFocusTimeoutsRef.current) {
+      clearTimeout(timeoutId);
+    }
+    priceInputFocusTimeoutsRef.current = [];
+  }, []);
+
+  const focusPriceInputNow = useCallback(() => {
+    if (!isPriceModalOpen) {
+      return;
+    }
+
+    priceInputRef.current?.focus();
+  }, [isPriceModalOpen]);
+
+  const schedulePriceInputFocus = useCallback(
+    (delays: number[] = [80, 200, 360, 560]) => {
+      clearPriceInputFocusTimers();
+
+      priceInputFocusTimeoutsRef.current = delays.map((delayMs) =>
+        setTimeout(() => {
+          focusPriceInputNow();
+        }, delayMs),
+      );
+    },
+    [clearPriceInputFocusTimers, focusPriceInputNow],
+  );
+
+  const setPriceInputNode = useCallback(
+    (input: RNTextInput | null) => {
+      priceInputRef.current = input;
+
+      if (input && isPriceModalOpen) {
+        schedulePriceInputFocus([0, 90, 220]);
+      }
+    },
+    [isPriceModalOpen, schedulePriceInputFocus],
+  );
+
+  useEffect(() => {
+    if (!isPriceModalOpen) {
+      clearPriceInputFocusTimers();
+      return;
+    }
+
+    schedulePriceInputFocus([100, 240, 420, 700]);
+
+    return () => {
+      clearPriceInputFocusTimers();
+    };
+  }, [clearPriceInputFocusTimers, isPriceModalOpen, schedulePriceInputFocus]);
+
+  useEffect(
+    () => () => {
+      clearPriceInputFocusTimers();
+    },
+    [clearPriceInputFocusTimers],
+  );
+
   const persistJobMetadata = useCallback(
     async (input: {
       scheduledDateIso?: string | null;
       deadlineDateIso?: string | null;
-      status?: "new" | "someday" | null;
+      status?: JobStatus | null;
+      price?: number | null;
     }) => {
       if (!job) {
         return;
@@ -409,6 +742,7 @@ export default function JobDetailScreen() {
               ? null
               : input.status
             : job.status,
+        price: input.price !== undefined ? input.price : job.price,
       };
 
       setJob(nextJob);
@@ -420,6 +754,7 @@ export default function JobDetailScreen() {
           scheduledDateIso: input.scheduledDateIso,
           deadlineDateIso: input.deadlineDateIso,
           status: input.status,
+          price: input.price,
         });
       } catch (error) {
         setJob(previousJob);
@@ -435,20 +770,22 @@ export default function JobDetailScreen() {
 
   const handleSelectWhenDate = useCallback(
     (date: Date) => {
+      const shouldLeaveSomeday = job?.status === "someday";
       void persistJobMetadata({
         scheduledDateIso: toDateOnlyIso(date),
-        status: null,
+        ...(shouldLeaveSomeday ? { status: "new" as const } : {}),
       });
     },
-    [persistJobMetadata],
+    [job?.status, persistJobMetadata],
   );
 
   const handleSelectToday = useCallback(() => {
+    const shouldLeaveSomeday = job?.status === "someday";
     void persistJobMetadata({
       scheduledDateIso: toDateOnlyIso(new Date()),
-      status: null,
+      ...(shouldLeaveSomeday ? { status: "new" as const } : {}),
     });
-  }, [persistJobMetadata]);
+  }, [job?.status, persistJobMetadata]);
 
   const handleSelectSomeday = useCallback(() => {
     void persistJobMetadata({
@@ -458,11 +795,27 @@ export default function JobDetailScreen() {
   }, [persistJobMetadata]);
 
   const handleClearWhenSelection = useCallback(() => {
+    const shouldLeaveSomeday = job?.status === "someday";
     void persistJobMetadata({
       scheduledDateIso: null,
-      status: null,
+      ...(shouldLeaveSomeday ? { status: "new" as const } : {}),
     });
-  }, [persistJobMetadata]);
+  }, [job?.status, persistJobMetadata]);
+
+  const handleSelectStatus = useCallback(
+    (status: JobStatus) => {
+      closeStatusModal();
+      if (status === "someday") {
+        void persistJobMetadata({
+          status: "someday",
+          scheduledDateIso: null,
+        });
+        return;
+      }
+      void persistJobMetadata({ status });
+    },
+    [closeStatusModal, persistJobMetadata],
+  );
 
   const handleSelectDeadlineDate = useCallback(
     (date: Date) => {
@@ -478,6 +831,32 @@ export default function JobDetailScreen() {
       deadlineDateIso: null,
     });
   }, [persistJobMetadata]);
+
+  const handleSavePrice = useCallback(() => {
+    if (!job) {
+      return;
+    }
+
+    try {
+      const nextPrice = parsePriceInputValue(priceDraft);
+      closePriceModal();
+      void persistJobMetadata({
+        price: nextPrice,
+      });
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Nisam uspeo da sacuvam cenu.",
+      );
+    }
+  }, [closePriceModal, job, persistJobMetadata, priceDraft]);
+
+  const handleClearPrice = useCallback(() => {
+    closePriceModal();
+    setPriceDraft("");
+    void persistJobMetadata({
+      price: null,
+    });
+  }, [closePriceModal, persistJobMetadata]);
 
   const persistNotes = useCallback(async () => {
     if (!job) {
@@ -561,39 +940,48 @@ export default function JobDetailScreen() {
   }, []);
 
   const persistChecklistItems = useCallback(
-    async (nextItems: ChecklistItem[]) => {
+    async (nextItems: ChecklistItem[], nextCompletedIds?: string[]) => {
       if (!job) {
         return;
       }
 
       const previousItems = checklistItemsRef.current;
-      const previousSavedItems = savedChecklistItemsRef.current;
-      const nextChecklistTexts = nextItems
-        .map((item) => item.text.trim())
-        .filter((text) => text.length > 0);
+      const previousCompletedIds = completedChecklistItemIds;
+      const previousSavedItems = savedChecklistStateItemsRef.current;
+      const resolvedCompletedIds = normalizeCompletedIdsForItems(
+        nextItems,
+        nextCompletedIds ?? completedChecklistItemIds,
+      );
+      const nextChecklistStateItems = buildChecklistStateItems(
+        nextItems,
+        resolvedCompletedIds,
+      );
 
-      if (areStringArraysEqual(nextChecklistTexts, previousSavedItems)) {
+      if (areChecklistStateItemsEqual(nextChecklistStateItems, previousSavedItems)) {
         setChecklistItems(nextItems);
         checklistItemsRef.current = nextItems;
+        setCompletedChecklistItemIds(resolvedCompletedIds);
         return;
       }
 
       setChecklistItems(nextItems);
       checklistItemsRef.current = nextItems;
-      setSavedChecklistItems(nextChecklistTexts);
-      savedChecklistItemsRef.current = nextChecklistTexts;
+      setCompletedChecklistItemIds(resolvedCompletedIds);
+      setSavedChecklistStateItems(nextChecklistStateItems);
+      savedChecklistStateItemsRef.current = nextChecklistStateItems;
       setErrorMessage(null);
 
       try {
         await updateInboxTodo(job.id, {
           title: job.title?.trim() || "Bez naslova",
-          checklistItems: nextChecklistTexts,
+          checklistStateItems: nextChecklistStateItems,
         });
       } catch (error) {
         setChecklistItems(previousItems);
         checklistItemsRef.current = previousItems;
-        setSavedChecklistItems(previousSavedItems);
-        savedChecklistItemsRef.current = previousSavedItems;
+        setCompletedChecklistItemIds(previousCompletedIds);
+        setSavedChecklistStateItems(previousSavedItems);
+        savedChecklistStateItemsRef.current = previousSavedItems;
         setErrorMessage(
           error instanceof Error
             ? error.message
@@ -601,7 +989,7 @@ export default function JobDetailScreen() {
         );
       }
     },
-    [job],
+    [completedChecklistItemIds, job],
   );
 
   const openChecklistComposer = useCallback(() => {
@@ -679,14 +1067,14 @@ export default function JobDetailScreen() {
   );
 
   const handleChecklistCompleteToggle = useCallback((itemId: string) => {
-    setCompletedChecklistItemIds((current) => {
-      if (current.includes(itemId)) {
-        return current.filter((entry) => entry !== itemId);
-      }
+    const currentItems = checklistItemsRef.current;
+    const nextCompletedIds = completedChecklistItemIds.includes(itemId)
+      ? completedChecklistItemIds.filter((entry) => entry !== itemId)
+      : [...completedChecklistItemIds, itemId];
 
-      return [...current, itemId];
-    });
-  }, []);
+    setCompletedChecklistItemIds(nextCompletedIds);
+    void persistChecklistItems(currentItems, nextCompletedIds);
+  }, [completedChecklistItemIds, persistChecklistItems]);
 
   const handleChecklistItemTextChange = useCallback((itemId: string, text: string) => {
     setEditingChecklistText(text);
@@ -711,6 +1099,9 @@ export default function JobDetailScreen() {
       }
 
       const nextItems = currentItems.filter((entry) => entry.id !== itemId);
+      const nextCompletedIds = completedChecklistItemIds.filter(
+        (entry) => entry !== itemId,
+      );
 
       if (nextItems.length > 0) {
         const previousIndex = Math.max(0, removedIndex - 1);
@@ -732,9 +1123,15 @@ export default function JobDetailScreen() {
         setIsChecklistVisible(isChecklistComposerOpen);
       }
 
-      void persistChecklistItems(nextItems);
+      setCompletedChecklistItemIds(nextCompletedIds);
+      void persistChecklistItems(nextItems, nextCompletedIds);
     },
-    [focusChecklistItemWithRetry, isChecklistComposerOpen, persistChecklistItems],
+    [
+      completedChecklistItemIds,
+      focusChecklistItemWithRetry,
+      isChecklistComposerOpen,
+      persistChecklistItems,
+    ],
   );
 
   const commitChecklistEditing = useCallback(
@@ -835,10 +1232,22 @@ export default function JobDetailScreen() {
         onPress: openWhenModal,
       },
       {
+        key: "change-status",
+        label: "Change status",
+        icon: "todo",
+        onPress: openStatusModal,
+      },
+      {
         key: "add-client",
         label: "Add Client",
         icon: "client",
         onPress: openClientsModal,
+      },
+      {
+        key: "change-price",
+        label: hasPriceValue ? "Edit Price" : "Set Price",
+        icon: "tag",
+        onPress: openPriceModal,
       },
       {
         key: "deadline",
@@ -860,8 +1269,11 @@ export default function JobDetailScreen() {
     [
       handleCompleteFromMenu,
       handleDeleteFromMenu,
+      hasPriceValue,
       openClientsModal,
       openDeadlineModal,
+      openPriceModal,
+      openStatusModal,
       openWhenModal,
     ],
   );
@@ -883,10 +1295,21 @@ export default function JobDetailScreen() {
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 132, flexGrow: 1 }}
       >
         <Animated.View
-          className="mb-3 flex-row items-center"
+          className="mb-1 flex-row items-center"
           style={heroTitleAnimatedStyle}
         >
-          <Icon name="todo" size={22} color="var(--color-inbox)" />
+          <View
+            className="h-[22px] w-[22px] items-center justify-center rounded-full"
+            style={{
+              borderWidth: 1.4,
+              borderColor: withOpacity(secondaryTextColor, 0.6),
+            }}
+          >
+            <View
+              className="h-[12px] w-[12px] rounded-full"
+              style={{ backgroundColor: statusIndicatorFillColor }}
+            />
+          </View>
           <View className="ml-2.5 flex-1 flex-row items-center">
             <Text
               numberOfLines={1}
@@ -913,6 +1336,79 @@ export default function JobDetailScreen() {
           </View>
         </Animated.View>
 
+        {job ? (
+          <Animated.View
+            className="mb-2 ml-8 min-w-0 flex-row items-center"
+            style={heroTitleAnimatedStyle}
+          >
+            <TouchableOpacity
+              activeOpacity={0.72}
+              className="min-w-0 shrink flex-row items-center"
+              onPress={openClientsModal}
+            >
+              <Icon
+                name="client"
+                size={14}
+                color={metaIconColor}
+                weight="light"
+              />
+              <Text
+                variant="labelSm"
+                className="ml-1 font-regular italic"
+                style={{ color: secondaryTextColor, flexShrink: 1 }}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {job.client_name ?? "Add client"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.72}
+              className="ml-3 flex-row items-center"
+              onPress={openPriceModal}
+            >
+              <Icon
+                name="tag"
+                size={14}
+                color={metaIconColor}
+                weight="light"
+              />
+              <Text
+                variant="labelSm"
+                className="ml-1 font-regular italic"
+                style={{ color: secondaryTextColor }}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {priceLabel ?? "Set price"}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.72}
+              className="ml-3 flex-row items-center"
+              onPress={openPriceModal}
+            >
+              <Icon
+                name="dollar"
+                size={14}
+                color={metaIconColor}
+                weight="light"
+              />
+              <Text
+                variant="labelSm"
+                className="ml-1 font-regular italic"
+                style={{ color: secondaryTextColor }}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {debtPriceMetaLabel}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        ) : null}
+
         {errorMessage ? (
           <Text className="mb-4 font-regular text-label-sm leading-5 text-things-muted">
             {errorMessage}
@@ -921,45 +1417,7 @@ export default function JobDetailScreen() {
 
         {job ? (
           <View className="mb-20">
-            {job.client_name || scheduledDateLabel || deadlineDateLabel ? (
-              <Animated.View className="mb-5" layout={metadataGroupLayout}>
-                {job.client_name ? (
-                  <Animated.View
-                    key="meta-client"
-                    layout={metadataRowLayout}
-                    entering={FadeIn.duration(260)}
-                    exiting={FadeOut.duration(260)}
-                    className="overflow-hidden"
-                  >
-                    <TouchableOpacity
-                      activeOpacity={0.72}
-                      className="min-w-0 flex-row items-center py-2.5"
-                      onPress={openClientsModal}
-                      style={{
-                        borderTopWidth: 0.5,
-                        borderBottomWidth: 0.5,
-                        borderColor: metadataSeparatorColor,
-                      }}
-                    >
-                      <Icon
-                        name="client"
-                        size={16}
-                        color={secondaryTextColor}
-                        weight="light"
-                      />
-                      <Text
-                        variant="label"
-                        className="ml-2 font-semibold"
-                        style={{ color: primaryTextColor, flexShrink: 1 }}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                      >
-                        {job.client_name}
-                      </Text>
-                    </TouchableOpacity>
-                  </Animated.View>
-                ) : null}
-
+            <Animated.View className="mb-5" layout={metadataGroupLayout}>
                 {scheduledDateLabel ? (
                   <Animated.View
                     key="meta-when"
@@ -1046,8 +1504,7 @@ export default function JobDetailScreen() {
                     </TouchableOpacity>
                   </Animated.View>
                 ) : null}
-              </Animated.View>
-            ) : null}
+            </Animated.View>
 
             <View className="relative min-h-[44px] py-1">
               {!notesDraft.trim() && !isNotesFocused ? (
@@ -1331,7 +1788,134 @@ export default function JobDetailScreen() {
                   </View>
                 ) : null}
               </View>
-            ) : null}
+            ) : (
+              <View className="mt-2 mx-1 min-h-[88px] items-center justify-center rounded-xl px-5 py-6">
+                <Text
+                  variant="labelSm"
+                  className="text-center italic"
+                  style={emptySectionEmbossTextStyle}
+                >
+                  No items yet
+                </Text>
+              </View>
+            )}
+
+            <View className="mt-6">
+              <View className="flex-row items-center justify-between">
+                <Text
+                  className="font-bold"
+                  style={{ color: subheaderColor, fontSize: 15 }}
+                >
+                  {"Payments"}
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.76}
+                  className="h-7 w-7 items-center justify-center rounded-full"
+                  onPress={openNewPaymentModal}
+                >
+                  <Icon name="plusfab" size={18} color={subheaderColor} />
+                </TouchableOpacity>
+              </View>
+              <View
+                className="mt-2 h-px"
+                style={{ backgroundColor: metadataSeparatorColor }}
+              />
+            </View>
+
+            {(job.payments?.length ?? 0) > 0 ? (
+              <View className="mt-2 rounded-xl">
+                {job.payments.map((payment) => {
+                  const paymentAmountLabel = formatPriceLabel(payment.amount) ?? "0 RSD";
+                  const paymentDateLabel = formatPaymentDateLabel(payment.payment_date);
+                  const paymentTitleLabel = payment.note?.trim() || "Payment";
+
+                  return (
+                    <View
+                      key={payment.id}
+                      className="mx-1 py-3"
+                    >
+                      <View className="flex-row items-center">
+                        <View
+                          className="mr-3 items-center justify-center"
+                          style={{
+                            width: SIZE_TOKENS.quickTaskCheckbox,
+                            height: SIZE_TOKENS.quickTaskCheckbox,
+                            borderRadius: RADIUS_TOKENS.xs,
+                            borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                            borderColor: paymentAccentColor,
+                            backgroundColor: paymentAccentColor,
+                          }}
+                        >
+                          <Icon name="check" size={10} color={paymentCheckIconColor} />
+                        </View>
+                        <Text
+                          variant="labelSm"
+                          className="mr-3 font-medium"
+                          style={{ color: paymentAccentColor, fontSize: 11, lineHeight: 14 }}
+                        >
+                          {paymentDateLabel}
+                        </Text>
+                        <Text
+                          variant="labelSm"
+                          className="flex-1 font-regular"
+                          style={{ color: primaryTextColor }}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {paymentTitleLabel}
+                        </Text>
+                        <Text
+                          variant="label"
+                          className="ml-3 font-semibold"
+                          style={{ color: primaryTextColor }}
+                        >
+                          {paymentAmountLabel}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : (
+              <View
+                className="mt-2 mx-1 min-h-[88px] items-center justify-center rounded-xl px-5 py-6"
+              >
+                <Text
+                  variant="labelSm"
+                  className="text-center italic"
+                  style={emptySectionEmbossTextStyle}
+                >
+                  No payments yet
+                </Text>
+              </View>
+            )}
+
+            <View className="mt-6">
+              <View className="flex-row items-center justify-between">
+                <Text
+                  className="font-bold"
+                  style={{ color: subheaderColor, fontSize: 15 }}
+                >
+                  {"Photos"}
+                </Text>
+              </View>
+              <View
+                className="mt-2 h-px"
+                style={{ backgroundColor: metadataSeparatorColor }}
+              />
+            </View>
+
+            <View
+              className="mt-2 mx-1 min-h-[88px] items-center justify-center rounded-xl px-5 py-6"
+            >
+              <Text
+                variant="labelSm"
+                className="text-center italic"
+                style={emptySectionEmbossTextStyle}
+              >
+                No photos yet
+              </Text>
+            </View>
 
           </View>
         ) : (
@@ -1360,6 +1944,314 @@ export default function JobDetailScreen() {
         onClearSelection={handleClearDeadlineSelection}
         selectedDate={deadlineDateObj}
       />
+
+      <Modal
+        visible={isPriceModalOpen}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={closePriceModal}
+        onShow={() => {
+          schedulePriceInputFocus([140, 300, 520, 820]);
+        }}
+      >
+        <View style={StyleSheet.absoluteFill}>
+          <TransparentModalShell
+            closeOnBackdropPress
+            onBackdropPress={closePriceModal}
+            enteringBackdrop={FadeIn.duration(120)}
+            exitingBackdrop={FadeOut.duration(120)}
+            contentStyle={[
+              {
+                width: "85%",
+                borderWidth: 0.5,
+                borderRadius: 28,
+                overflow: "hidden",
+                borderColor: statusModalBorderColor,
+                backgroundColor: statusModalBg,
+              },
+              statusModalWindowShadow,
+            ]}
+            overlayStyle={{
+              paddingHorizontal: 16,
+              paddingVertical: 24,
+            }}
+            backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
+            backdropOpacity={isDark ? 0.64 : 0.4}
+          >
+            <View
+              style={{
+                height: 56,
+                alignItems: "center",
+                justifyContent: "center",
+                marginTop: 6,
+                marginBottom: 10,
+              }}
+            >
+              <Text
+                variant="bodyLg"
+                className="font-bold"
+                style={{ color: primaryTextColor, textAlign: "center" }}
+              >
+                Set Price
+              </Text>
+              <View style={{ position: "absolute", top: 8, right: 16 }}>
+                <ModalCircleButton icon="close" theme={theme} onPress={closePriceModal} />
+              </View>
+            </View>
+
+            <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>
+              <Text
+                className="mb-2 ml-1 font-semibold text-label-md"
+                style={{ color: authInputLabelColor }}
+              >
+                Price
+              </Text>
+              <View
+                className="px-3 py-0"
+                style={{
+                  height: authFieldHeight,
+                  borderRadius: authControlRadius,
+                  backgroundColor: authFieldBg,
+                  borderWidth: isPriceInputFocused ? authFocusBorderWidth : authSubtleBorderWidth,
+                  borderColor: isPriceInputFocused ? authFocusBorderColor : authIdleBorderColor,
+                }}
+                onLayout={() => {
+                  if (isPriceModalOpen) {
+                    schedulePriceInputFocus([20, 120, 260]);
+                  }
+                }}
+              >
+                <View className="h-full flex-row items-center">
+                  <AppTextInput
+                    ref={setPriceInputNode}
+                    value={priceDraft}
+                    onChangeText={setPriceDraft}
+                    onFocus={() => setIsPriceInputFocused(true)}
+                    onBlur={() => setIsPriceInputFocused(false)}
+                    autoFocus
+                    showSoftInputOnFocus
+                    keyboardType={Platform.OS === "ios" ? "decimal-pad" : "numeric"}
+                    placeholder="0"
+                    placeholderTextColor={authPlaceholderColor}
+                    returnKeyType="done"
+                    onSubmitEditing={handleSavePrice}
+                    variant="bodyMd"
+                    selectionColor={selectionColor}
+                    className="flex-1 leading-5"
+                    style={{
+                      color: primaryTextColor,
+                    }}
+                  />
+                  <Text
+                    variant="labelSm"
+                    className="ml-2 font-semibold"
+                    style={{ color: secondaryTextColor }}
+                  >
+                    RSD
+                  </Text>
+                </View>
+              </View>
+
+              <View className="flex-row" style={{ gap: 10, marginTop: 50 }}>
+                <View
+                  style={{
+                    borderRadius: 9999,
+                    borderWidth: 1,
+                    flex: 1,
+                    minHeight: 40,
+                    overflow: "hidden",
+                    position: "relative",
+                    borderColor: actionButtonBorder,
+                  }}
+                >
+                  <BlurView
+                    intensity={48}
+                    tint="default"
+                    experimentalBlurMethod={blurMethod}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  <View
+                    style={[StyleSheet.absoluteFill, { backgroundColor: actionButtonHighlight }]}
+                    pointerEvents="none"
+                  />
+                  <Pressable
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 9999,
+                      flex: 1,
+                      justifyContent: "center",
+                      minHeight: 40,
+                      paddingHorizontal: 14,
+                    }}
+                    android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
+                    onPress={handleClearPrice}
+                  >
+                    <Text
+                      className="font-semibold text-label-sm"
+                      style={{ color: actionButtonText }}
+                      numberOfLines={1}
+                    >
+                      Clear
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View
+                  style={{
+                    borderRadius: 9999,
+                    borderWidth: 1,
+                    flex: 1,
+                    minHeight: 40,
+                    overflow: "hidden",
+                    position: "relative",
+                    borderColor: actionButtonBorder,
+                  }}
+                >
+                  <BlurView
+                    intensity={48}
+                    tint="default"
+                    experimentalBlurMethod={blurMethod}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  <View
+                    style={[StyleSheet.absoluteFill, { backgroundColor: actionButtonHighlight }]}
+                    pointerEvents="none"
+                  />
+                  <Pressable
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 9999,
+                      flex: 1,
+                      justifyContent: "center",
+                      minHeight: 40,
+                      paddingHorizontal: 14,
+                    }}
+                    android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
+                    onPress={handleSavePrice}
+                  >
+                    <Text
+                      className="font-semibold text-label-sm"
+                      style={{ color: actionButtonText }}
+                      numberOfLines={1}
+                    >
+                      Save
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </TransparentModalShell>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isStatusModalOpen}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeStatusModal}
+      >
+        <View style={StyleSheet.absoluteFill}>
+          <TransparentModalShell
+            closeOnBackdropPress
+            onBackdropPress={closeStatusModal}
+            enteringBackdrop={FadeIn.duration(120)}
+            exitingBackdrop={FadeOut.duration(120)}
+            enteringContent={FadeIn.duration(170)}
+            exitingContent={FadeOut.duration(120)}
+            contentStyle={[
+              {
+                width: "85%",
+                borderWidth: 0.5,
+                borderRadius: 28,
+                overflow: "hidden",
+                borderColor: statusModalBorderColor,
+                backgroundColor: statusModalBg,
+              },
+              statusModalWindowShadow,
+            ]}
+            overlayStyle={{
+              paddingHorizontal: 16,
+              paddingVertical: 24,
+            }}
+            backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
+            backdropOpacity={isDark ? 0.64 : 0.4}
+          >
+            <View
+              style={{
+                height: 56,
+                alignItems: "center",
+                justifyContent: "center",
+                marginTop: 6,
+                marginBottom: 10,
+              }}
+            >
+              <Text
+                variant="bodyLg"
+                className="font-bold"
+                style={{ color: primaryTextColor, textAlign: "center" }}
+              >
+                Change Status
+              </Text>
+              <View style={{ position: "absolute", top: 8, right: 16 }}>
+                <ModalCircleButton icon="close" theme={theme} onPress={closeStatusModal} />
+              </View>
+            </View>
+
+            <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+              {statusOptions.map((option, index) => {
+                const isSelected = currentJobStatus === option.key;
+                const optionColor = statusColorByKey[option.key];
+
+                return (
+                  <TouchableOpacity
+                    key={option.key}
+                    activeOpacity={0.78}
+                    className="flex-row items-center justify-between py-3"
+                    style={{
+                      borderTopWidth: index === 0 ? 0.5 : 0,
+                      borderBottomWidth: 0.5,
+                      borderColor: statusModalDividerColor,
+                      paddingHorizontal: 6,
+                    }}
+                    onPress={() => handleSelectStatus(option.key)}
+                  >
+                    <View className="flex-row items-center">
+                      <View
+                        className="h-[20px] w-[20px] items-center justify-center rounded-full"
+                        style={{
+                          borderWidth: 1.25,
+                          borderColor: withOpacity(secondaryTextColor, 0.58),
+                        }}
+                      >
+                        <View
+                          className="h-[10px] w-[10px] rounded-full"
+                          style={{ backgroundColor: optionColor }}
+                        />
+                      </View>
+                      <Text
+                        variant="label"
+                        className="ml-3 font-semibold"
+                        style={{ color: primaryTextColor }}
+                      >
+                        {option.label}
+                      </Text>
+                    </View>
+                    {isSelected ? (
+                      <Icon name="check" size={18} color={primaryTextColor} />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </TransparentModalShell>
+        </View>
+      </Modal>
 
       {isMenuOpen && job ? (
         <ProjectMenu

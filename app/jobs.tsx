@@ -1,4 +1,4 @@
-import { Icon, LIST_ICON_COLORS } from "@/components/Icon";
+import { Icon, IconName, LIST_ICON_COLORS } from "@/components/Icon";
 import InlineTodoAccordion from "@/components/InlineTodoAccordion";
 import ProjectHeader from "@/components/ProjectHeader";
 import WhenCalendarModal from "@/components/WhenCalendarModal";
@@ -12,12 +12,14 @@ import {
 import {
   completeInboxTodo,
   createTodo,
+  deleteInboxTodo,
   fetchJobsList,
   fetchLogbookTodos,
   JobsListItem,
   updateInboxTodo,
 } from "@/lib/repository";
 import { subscribeJobsInlineComposer } from "@/lib/jobsInlineComposer";
+import { setJobsSelectionActive } from "@/lib/jobsSelectionMode";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { useFocusEffect } from "@react-navigation/native";
 import { Stack, router } from "expo-router";
@@ -25,6 +27,8 @@ import { useColorScheme } from "nativewind";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, TouchableOpacity, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { BlurView } from "expo-blur";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   FadeIn,
   FadeOut,
@@ -103,7 +107,16 @@ type SectionRenderItem =
       type: "job";
       key: string;
       job: JobsListItem;
+    }
+  | {
+      type: "showMore";
+      key: string;
+      sectionKey: string;
+      hiddenCount: number;
+      isExpanded: boolean;
     };
+
+const SECTION_PREVIEW_LIMIT = 3;
 
 type LoggedJob = {
   id: string;
@@ -165,28 +178,37 @@ function isSameMonth(left: Date, right: Date) {
 
 const SWIPE_WHEN_REVEAL_WIDTH = 36;
 const SWIPE_WHEN_TRIGGER = 27;
+const DATE_ROW_FLIGHT_MS = 520;
+const DATE_LIFT_HOLD_MS = 420;
+const DATE_LIFT_FADE_MS = 520;
 const JOB_FLIGHT_LAYOUT = LinearTransition.springify()
   .damping(36)
   .stiffness(160);
 const JOB_STATIC_LAYOUT = LinearTransition.duration(1);
 const SECTION_STATIC_LAYOUT = LinearTransition.duration(1);
 
-function SwipeableWhenRow({
+function SwipeableJobRow({
   onOpenWhen,
+  onTriggerSelect,
   isWhenActive = false,
   revealBackgroundColor,
   activeBackgroundColor,
-  actionBackgroundColor,
-  actionIconColor,
+  whenBackgroundColor,
+  whenIconColor,
+  selectBackgroundColor,
+  selectIconColor,
   children,
   disabled = false,
 }: {
   onOpenWhen: () => void;
+  onTriggerSelect?: () => void;
   isWhenActive?: boolean;
   revealBackgroundColor: string;
   activeBackgroundColor: string;
-  actionBackgroundColor: string;
-  actionIconColor: string;
+  whenBackgroundColor: string;
+  whenIconColor: string;
+  selectBackgroundColor: string;
+  selectIconColor: string;
   children: React.ReactNode;
   disabled?: boolean;
 }) {
@@ -201,32 +223,39 @@ function SwipeableWhenRow({
     () =>
       Gesture.Pan()
         .enabled(!disabled)
-        .activeOffsetX([8, 999])
+        .activeOffsetX([-8, 8])
         .failOffsetY([-10, 10])
         .onUpdate((event) => {
-          const next = Math.max(0, Math.min(event.translationX, SWIPE_WHEN_REVEAL_WIDTH));
+          const next = Math.max(
+            -SWIPE_WHEN_REVEAL_WIDTH,
+            Math.min(event.translationX, SWIPE_WHEN_REVEAL_WIDTH),
+          );
           translateX.value = next;
         })
         .onEnd(() => {
           const shouldOpenWhen = translateX.value >= SWIPE_WHEN_TRIGGER;
+          const shouldTriggerSelect =
+            !!onTriggerSelect && translateX.value <= -SWIPE_WHEN_TRIGGER;
           translateX.value = withTiming(0, { duration: 180 });
           if (shouldOpenWhen) {
             runOnJS(onOpenWhen)();
+          } else if (shouldTriggerSelect && onTriggerSelect) {
+            runOnJS(onTriggerSelect)();
           }
         })
         .onFinalize(() => {
-          if (translateX.value > 0) {
+          if (translateX.value !== 0) {
             translateX.value = withTiming(0, { duration: 180 });
           }
         }),
-    [disabled, onOpenWhen, translateX],
+    [disabled, onOpenWhen, onTriggerSelect, translateX],
   );
 
   const foregroundStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
   }));
 
-  const revealProgressStyle = useAnimatedStyle(() => {
+  const whenRevealStyle = useAnimatedStyle(() => {
     const revealProgress = interpolate(
       translateX.value,
       [0, 8, SWIPE_WHEN_REVEAL_WIDTH],
@@ -238,10 +267,22 @@ function SwipeableWhenRow({
     };
   });
 
+  const selectRevealStyle = useAnimatedStyle(() => {
+    const revealProgress = interpolate(
+      translateX.value,
+      [-SWIPE_WHEN_REVEAL_WIDTH, -8, 0],
+      [1, 1, 0],
+      Extrapolation.CLAMP,
+    );
+    return {
+      opacity: revealProgress,
+    };
+  });
+
   const movingSurfaceStyle = useAnimatedStyle(() => ({
     opacity: Math.max(
       interpolate(
-        translateX.value,
+        Math.abs(translateX.value),
         [0, 1, 2],
         [0, 0.98, 1],
         Extrapolation.CLAMP,
@@ -272,12 +313,33 @@ function SwipeableWhenRow({
               alignItems: "center",
               flexDirection: "row",
               paddingLeft: 12,
-              backgroundColor: actionBackgroundColor,
+              backgroundColor: whenBackgroundColor,
             },
-            revealProgressStyle,
+            whenRevealStyle,
           ]}
         >
-          <Icon name="upcoming" size={18} color={actionIconColor} />
+          <Icon name="upcoming" size={18} color={whenIconColor} />
+        </Animated.View>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: 0,
+              borderRadius: 11,
+              alignItems: "center",
+              flexDirection: "row",
+              justifyContent: "flex-end",
+              paddingRight: 12,
+              backgroundColor: selectBackgroundColor,
+            },
+            selectRevealStyle,
+          ]}
+        >
+          <Icon name="checklist" size={18} color={selectIconColor} />
         </Animated.View>
         <Animated.View style={foregroundStyle}>
           <Animated.View
@@ -300,22 +362,186 @@ function SwipeableWhenRow({
   );
 }
 
+function SectionMoreToggle({
+  isExpanded,
+  hiddenCount,
+  onPress,
+  textColor,
+  pressedBg,
+}: {
+  isExpanded: boolean;
+  hiddenCount: number;
+  onPress: () => void;
+  textColor: string;
+  pressedBg: string;
+}) {
+  const [isPressed, setIsPressed] = useState(false);
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      onPressIn={() => setIsPressed(true)}
+      onPressOut={() => setIsPressed(false)}
+      activeOpacity={0.88}
+      className="mt-2 self-start rounded-full py-1.5"
+      style={{
+        backgroundColor: isPressed ? pressedBg : "transparent",
+        marginLeft: -6,
+        paddingHorizontal: 10,
+      }}
+    >
+      <Text
+        className="font-medium"
+        style={{ color: textColor, fontSize: 11, lineHeight: 14 }}
+      >
+        {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+type SelectionActionItem = {
+  key: string;
+  label: string;
+  icon: IconName;
+  onPress: () => void;
+};
+
+function SelectionActionBar({
+  visible,
+  bottom,
+  bg,
+  border,
+  primaryColor,
+  colorMode,
+  actions,
+}: {
+  visible: boolean;
+  bottom: number;
+  bg: string;
+  border: string;
+  primaryColor: string;
+  colorMode: "light" | "dark";
+  actions: SelectionActionItem[];
+}) {
+  const progress = useSharedValue(visible ? 1 : 0);
+  const slideDistance = bottom + 80;
+
+  useEffect(() => {
+    progress.value = withTiming(visible ? 1 : 0, { duration: visible ? 260 : 200 });
+  }, [progress, visible]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: progress.value,
+    transform: [
+      {
+        translateY: interpolate(
+          progress.value,
+          [0, 1],
+          [slideDistance, 0],
+          Extrapolation.CLAMP,
+        ),
+      },
+      {
+        scale: interpolate(progress.value, [0, 1], [0.94, 1], Extrapolation.CLAMP),
+      },
+    ],
+  }));
+
+  return (
+    <View
+      pointerEvents={visible ? "box-none" : "none"}
+      className="absolute left-0 right-0 items-center"
+      style={{ bottom, zIndex: 60 }}
+    >
+      <Animated.View
+        style={[
+          animatedStyle,
+          {
+            borderRadius: RADIUS_TOKENS.full,
+            borderWidth: 0.5,
+            borderColor: border,
+            backgroundColor: bg,
+            overflow: "hidden",
+          },
+        ]}
+      >
+        <BlurView
+          intensity={colorMode === "dark" ? 54 : 70}
+          tint={colorMode === "dark" ? "dark" : "light"}
+          style={{ borderRadius: RADIUS_TOKENS.full }}
+        >
+          <View
+            className="flex-row items-center"
+            style={{ paddingHorizontal: 10, paddingVertical: 4, gap: 6 }}
+          >
+            {actions.map((action) => (
+              <Pressable
+                key={action.key}
+                onPress={action.onPress}
+                className="flex-row items-center"
+                style={{
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  borderRadius: RADIUS_TOKENS.full,
+                }}
+              >
+                <Icon name={action.icon} size={22} color={primaryColor} />
+                <Text
+                  variant="label"
+                  style={{ color: primaryColor, marginLeft: 6 }}
+                >
+                  {action.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </BlurView>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function JobsScreen() {
   const { colorScheme } = useColorScheme();
   const colorMode = colorScheme === "dark" ? "dark" : "light";
+  const insets = useSafeAreaInsets();
   const [jobs, setJobs] = useState<JobsListItem[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const isSelectionMode = selectedIds.size > 0;
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const toggleSectionExpanded = useCallback((key: string) => {
+    setExpandedSections((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
   const scrollViewRef = useRef<Animated.ScrollView | null>(null);
   const jobsRef = useRef<JobsListItem[]>([]);
   const [inlineComposerToken, setInlineComposerToken] = useState("initial");
   const [isInlineComposerVisible, setIsInlineComposerVisible] = useState(false);
   const [isInlineComposerExpanded, setIsInlineComposerExpanded] = useState(false);
+  const [isInlineComposerDirty, setIsInlineComposerDirty] = useState(false);
   const [isDateRelayoutAnimating, setIsDateRelayoutAnimating] = useState(false);
+  const [dateRelayoutJobIds, setDateRelayoutJobIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [dateLiftJobIds, setDateLiftJobIds] = useState<Set<string>>(new Set());
   const [loggedJobs, setLoggedJobs] = useState<LoggedJob[]>([]);
   const [isLoggedOpen, setIsLoggedOpen] = useState(false);
   const [isLoggedTogglePressed, setIsLoggedTogglePressed] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isWhenModalOpen, setIsWhenModalOpen] = useState(false);
   const [selectedWhenJobId, setSelectedWhenJobId] = useState<string | null>(null);
+  const [isBulkWhenMode, setIsBulkWhenMode] = useState(false);
   const [checkingIds, setCheckingIds] = useState<Set<string>>(new Set());
   const checkingIdsRef = useRef<Set<string>>(new Set());
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -324,7 +550,10 @@ export default function JobsScreen() {
     {},
   );
   const dateRelayoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dateLiftFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dateLiftClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollY = useSharedValue(0);
+  const dateLiftVisualProgress = useSharedValue(0);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const checkboxBorderColor = withOpacity(
     COLOR_TOKENS[colorMode]["text.secondary"],
@@ -353,6 +582,57 @@ export default function JobsScreen() {
   );
   const swipeWhenBackgroundColor = LIST_ICON_COLORS["--color-today"];
   const swipeWhenIconColor = "#FFFFFF";
+  const swipeSelectBackgroundColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const swipeSelectIconColor = "#FFFFFF";
+  const selectionCircleColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.7 : 0.55,
+  );
+  const selectionFillColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const actionBarBg =
+    colorMode === "dark"
+      ? withOpacity(COLOR_TOKENS.dark["btn.secondary"], 0.92)
+      : withOpacity(COLOR_TOKENS.light["bg.modal"], 0.96);
+  const actionBarBorder = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.56 : 0.4,
+  );
+  const actionBarPrimaryColor = COLOR_TOKENS[colorMode]["text.primary"];
+
+  const clearDateRelayoutTimers = useCallback(() => {
+    if (dateRelayoutTimeoutRef.current) {
+      clearTimeout(dateRelayoutTimeoutRef.current);
+      dateRelayoutTimeoutRef.current = null;
+    }
+    if (dateLiftFadeTimeoutRef.current) {
+      clearTimeout(dateLiftFadeTimeoutRef.current);
+      dateLiftFadeTimeoutRef.current = null;
+    }
+    if (dateLiftClearTimeoutRef.current) {
+      clearTimeout(dateLiftClearTimeoutRef.current);
+      dateLiftClearTimeoutRef.current = null;
+    }
+  }, []);
+
+  const resetDateRelayoutState = useCallback(() => {
+    setIsDateRelayoutAnimating(false);
+    setDateRelayoutJobIds(new Set());
+    setDateLiftJobIds(new Set());
+    dateLiftVisualProgress.value = 0;
+    clearDateRelayoutTimers();
+  }, [clearDateRelayoutTimers, dateLiftVisualProgress]);
+
+  const hideInlineComposer = useCallback(
+    (options?: { collapse?: boolean }) => {
+      const shouldCollapse = options?.collapse ?? true;
+      if (shouldCollapse) {
+        setIsInlineComposerExpanded(false);
+      }
+      setIsInlineComposerVisible(false);
+      setIsInlineComposerDirty(false);
+    },
+    [],
+  );
 
   const clearPendingRemovals = useCallback(() => {
     Object.values(removalTimeoutsRef.current).forEach((timeoutId) => {
@@ -361,27 +641,41 @@ export default function JobsScreen() {
     removalTimeoutsRef.current = {};
   }, []);
 
-  const triggerDateRelayoutAnimation = useCallback(() => {
-    if (dateRelayoutTimeoutRef.current) {
-      clearTimeout(dateRelayoutTimeoutRef.current);
-      dateRelayoutTimeoutRef.current = null;
-    }
-    setIsDateRelayoutAnimating(true);
-    dateRelayoutTimeoutRef.current = setTimeout(() => {
-      setIsDateRelayoutAnimating(false);
-      dateRelayoutTimeoutRef.current = null;
-    }, 520);
-  }, []);
+  const triggerDateRelayoutAnimation = useCallback(
+    (jobIds: string[], applyLayoutChange?: () => void) => {
+      clearDateRelayoutTimers();
+      setDateRelayoutJobIds(new Set(jobIds));
+      setDateLiftJobIds(new Set(jobIds));
+      dateLiftVisualProgress.value = 1;
+      setIsDateRelayoutAnimating(jobIds.length > 0);
+      requestAnimationFrame(() => {
+        applyLayoutChange?.();
+      });
+      dateRelayoutTimeoutRef.current = setTimeout(() => {
+        setIsDateRelayoutAnimating(false);
+        setDateRelayoutJobIds(new Set());
+        dateRelayoutTimeoutRef.current = null;
+        dateLiftFadeTimeoutRef.current = setTimeout(() => {
+          dateLiftVisualProgress.value = withTiming(0, {
+            duration: DATE_LIFT_FADE_MS,
+          });
+          dateLiftFadeTimeoutRef.current = null;
+          dateLiftClearTimeoutRef.current = setTimeout(() => {
+            setDateLiftJobIds(new Set());
+            dateLiftClearTimeoutRef.current = null;
+          }, DATE_LIFT_FADE_MS);
+        }, DATE_LIFT_HOLD_MS);
+      }, DATE_ROW_FLIGHT_MS);
+    },
+    [clearDateRelayoutTimers, dateLiftVisualProgress],
+  );
 
   useEffect(() => {
     return () => {
       clearPendingRemovals();
-      if (dateRelayoutTimeoutRef.current) {
-        clearTimeout(dateRelayoutTimeoutRef.current);
-        dateRelayoutTimeoutRef.current = null;
-      }
+      clearDateRelayoutTimers();
     };
-  }, [clearPendingRemovals]);
+  }, [clearDateRelayoutTimers, clearPendingRemovals]);
 
   useEffect(() => {
     checkingIdsRef.current = checkingIds;
@@ -395,6 +689,16 @@ export default function JobsScreen() {
     jobsRef.current = jobs;
   }, [jobs]);
 
+  useEffect(() => {
+    setJobsSelectionActive(isSelectionMode);
+  }, [isSelectionMode]);
+
+  useEffect(() => {
+    return () => {
+      setJobsSelectionActive(false);
+    };
+  }, []);
+
   const selectedWhenJob = useMemo(
     () =>
       selectedWhenJobId
@@ -405,17 +709,18 @@ export default function JobsScreen() {
 
   useEffect(() => {
     const unsubscribe = subscribeJobsInlineComposer(() => {
-      setIsDateRelayoutAnimating(false);
+      resetDateRelayoutState();
       requestAnimationFrame(() => {
         setInlineComposerToken(`${Date.now()}`);
         setIsInlineComposerVisible(true);
         setIsInlineComposerExpanded(true);
+        setIsInlineComposerDirty(false);
         scrollViewRef.current?.scrollTo({ y: 0, animated: false });
       });
     });
 
     return unsubscribe;
-  }, []);
+  }, [resetDateRelayoutState]);
 
   useEffect(() => {
     if (!isInlineComposerVisible || isInlineComposerExpanded) {
@@ -423,13 +728,13 @@ export default function JobsScreen() {
     }
 
     const hideTimeout = setTimeout(() => {
-      setIsInlineComposerVisible(false);
+      hideInlineComposer({ collapse: false });
     }, 320);
 
     return () => {
       clearTimeout(hideTimeout);
     };
-  }, [isInlineComposerExpanded, isInlineComposerVisible]);
+  }, [hideInlineComposer, isInlineComposerExpanded, isInlineComposerVisible]);
 
   const loadJobs = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -461,6 +766,7 @@ export default function JobsScreen() {
       );
       setCheckingIds(new Set());
       setCheckedIds(new Set());
+      setSelectedIds(new Set());
       setErrorMessage(null);
     } catch (error) {
       setJobs([]);
@@ -558,8 +864,64 @@ export default function JobsScreen() {
     setIsWhenModalOpen(true);
   }, []);
 
+  const toggleJobSelection = useCallback((jobId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(jobId)) {
+        next.delete(jobId);
+      } else {
+        next.add(jobId);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const openWhenForSelection = useCallback(() => {
+    if (selectedIds.size === 0) {
+      return;
+    }
+    setIsBulkWhenMode(true);
+    setSelectedWhenJobId(null);
+    setIsWhenModalOpen(true);
+  }, [selectedIds.size]);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const idsToDelete = Array.from(selectedIds);
+    if (idsToDelete.length === 0) {
+      return;
+    }
+
+    const previousJobs = jobsRef.current;
+    const previousLogged = loggedJobs;
+    const remainingJobs = previousJobs.filter((job) => !selectedIds.has(job.id));
+    const remainingLogged = previousLogged.filter(
+      (task) => !selectedIds.has(task.id),
+    );
+    setJobs(remainingJobs);
+    jobsRef.current = remainingJobs;
+    setLoggedJobs(remainingLogged);
+    setSelectedIds(new Set());
+    setErrorMessage(null);
+
+    try {
+      await Promise.all(idsToDelete.map((id) => deleteInboxTodo(id)));
+    } catch (error) {
+      setJobs(previousJobs);
+      jobsRef.current = previousJobs;
+      setLoggedJobs(previousLogged);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Nisam uspeo da obrisem poslove.",
+      );
+    }
+  }, [loggedJobs, selectedIds]);
+
   const closeWhenModal = useCallback(() => {
     setIsWhenModalOpen(false);
+    setIsBulkWhenMode(false);
   }, []);
 
   const persistJobWhen = useCallback(
@@ -594,9 +956,10 @@ export default function JobsScreen() {
           : job,
       );
 
-      triggerDateRelayoutAnimation();
-      setJobs(nextJobs);
-      jobsRef.current = nextJobs;
+      triggerDateRelayoutAnimation([jobId], () => {
+        setJobs(nextJobs);
+        jobsRef.current = nextJobs;
+      });
       setErrorMessage(null);
 
       try {
@@ -608,57 +971,66 @@ export default function JobsScreen() {
       } catch (error) {
         setJobs(previousJobs);
         jobsRef.current = previousJobs;
-        setIsDateRelayoutAnimating(false);
+        resetDateRelayoutState();
         setErrorMessage(
           error instanceof Error ? error.message : "Nisam uspeo da sacuvam when.",
         );
       }
     },
-    [triggerDateRelayoutAnimation],
+    [resetDateRelayoutState, triggerDateRelayoutAnimation],
+  );
+
+  const applyWhenInput = useCallback(
+    (input: {
+      scheduledDateIso?: string | null;
+      status?: "new" | "someday" | null;
+    }) => {
+      if (isBulkWhenMode) {
+        const ids = Array.from(selectedIds);
+        ids.forEach((id) => {
+          void persistJobWhen(id, input);
+        });
+        setSelectedIds(new Set());
+        return;
+      }
+      if (!selectedWhenJobId) {
+        return;
+      }
+      void persistJobWhen(selectedWhenJobId, input);
+    },
+    [isBulkWhenMode, persistJobWhen, selectedIds, selectedWhenJobId],
   );
 
   const handleSelectWhenDate = useCallback(
     (date: Date) => {
-      if (!selectedWhenJobId) {
-        return;
-      }
-      void persistJobWhen(selectedWhenJobId, {
+      applyWhenInput({
         scheduledDateIso: toDateOnlyIso(date),
         status: null,
       });
     },
-    [persistJobWhen, selectedWhenJobId],
+    [applyWhenInput],
   );
 
   const handleSelectToday = useCallback(() => {
-    if (!selectedWhenJobId) {
-      return;
-    }
-    void persistJobWhen(selectedWhenJobId, {
+    applyWhenInput({
       scheduledDateIso: toDateOnlyIso(new Date()),
       status: null,
     });
-  }, [persistJobWhen, selectedWhenJobId]);
+  }, [applyWhenInput]);
 
   const handleSelectSomeday = useCallback(() => {
-    if (!selectedWhenJobId) {
-      return;
-    }
-    void persistJobWhen(selectedWhenJobId, {
+    applyWhenInput({
       scheduledDateIso: null,
       status: "someday",
     });
-  }, [persistJobWhen, selectedWhenJobId]);
+  }, [applyWhenInput]);
 
   const handleClearWhenSelection = useCallback(() => {
-    if (!selectedWhenJobId) {
-      return;
-    }
-    void persistJobWhen(selectedWhenJobId, {
+    applyWhenInput({
       scheduledDateIso: null,
       status: null,
     });
-  }, [persistJobWhen, selectedWhenJobId]);
+  }, [applyWhenInput]);
 
   const scrollHandler = useAnimatedScrollHandler({
     onScroll: (event) => {
@@ -711,6 +1083,10 @@ export default function JobsScreen() {
       transform: [{ translateY }, { scale }],
     };
   });
+
+  const liftedRowOverlayAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: dateLiftVisualProgress.value,
+  }));
 
   const sections = useMemo<JobSection[]>(() => {
     const today = startOfDay(new Date());
@@ -769,17 +1145,33 @@ export default function JobsScreen() {
         spacingClassName: index === 0 ? "mb-3 mt-2" : "mb-3 mt-4",
       });
 
-      section.jobs.forEach((job) => {
+      const isExpanded = expandedSections.has(section.key);
+      const visibleJobs =
+        isExpanded || section.jobs.length <= SECTION_PREVIEW_LIMIT
+          ? section.jobs
+          : section.jobs.slice(0, SECTION_PREVIEW_LIMIT);
+
+      visibleJobs.forEach((job) => {
         items.push({
           type: "job",
           key: `job-${job.id}`,
           job,
         });
       });
+
+      if (section.jobs.length > SECTION_PREVIEW_LIMIT) {
+        items.push({
+          type: "showMore",
+          key: `show-more-${section.key}`,
+          sectionKey: section.key,
+          hiddenCount: section.jobs.length - SECTION_PREVIEW_LIMIT,
+          isExpanded,
+        });
+      }
     });
 
     return items;
-  }, [sections]);
+  }, [sections, expandedSections]);
 
   const todayDate = startOfDay(new Date());
   const selectedWhenDate = parseDateOnlyIso(selectedWhenJob?.scheduled_date ?? null);
@@ -835,13 +1227,16 @@ export default function JobsScreen() {
         status: payload.status === "someday" ? "someday" : "new",
       });
 
-      setIsInlineComposerExpanded(false);
-      setIsInlineComposerVisible(false);
+      hideInlineComposer();
       setErrorMessage(null);
       await loadJobs();
     },
-    [loadJobs],
+    [hideInlineComposer, loadJobs],
   );
+
+  const handleInlineComposerCollapseWithoutChanges = useCallback(() => {
+    hideInlineComposer();
+  }, [hideInlineComposer]);
 
   const renderSectionHeader = (title: string, spacingClassName = "mb-3 mt-2") => (
     <View className={spacingClassName}>
@@ -857,30 +1252,84 @@ export default function JobsScreen() {
     const isChecked = checkedIds.has(job.id);
     const isChecking = checkingIds.has(job.id);
     const isWhenActive = isWhenModalOpen && selectedWhenJobId === job.id;
+    const isSelected = selectedIds.has(job.id);
+    const isFlyingDateRow =
+      isDateRelayoutAnimating && dateRelayoutJobIds.has(job.id);
+    const isLiftedDateRow = dateLiftJobIds.has(job.id);
     const scheduledDate = parseDateOnlyIso(job.scheduled_date);
     const isTodayJob = !!scheduledDate && isSameDay(scheduledDate, todayDate);
     const scheduledDateLabel = formatCompactDate(job.scheduled_date);
     const deadlineDateLabel = formatCompactDate(job.deadline_date);
 
+    const handleRowPress = () => {
+      if (isSelectionMode) {
+        toggleJobSelection(job.id);
+        return;
+      }
+      router.push({
+        pathname: "/job/[id]",
+        params: { id: job.id },
+      });
+    };
+
     return (
       <Animated.View
         key={renderKey ?? `job-${job.id}`}
         className="mb-2.5"
-        layout={isDateRelayoutAnimating ? JOB_FLIGHT_LAYOUT : JOB_STATIC_LAYOUT}
+        layout={isFlyingDateRow ? JOB_FLIGHT_LAYOUT : JOB_STATIC_LAYOUT}
       >
-        <SwipeableWhenRow
+        <SwipeableJobRow
           onOpenWhen={() => openWhenModalForJob(job.id)}
+          onTriggerSelect={() => toggleJobSelection(job.id)}
           isWhenActive={isWhenActive}
           revealBackgroundColor={swipeRevealBackgroundColor}
           activeBackgroundColor={swipeActiveBackgroundColor}
-          actionBackgroundColor={swipeWhenBackgroundColor}
-          actionIconColor={swipeWhenIconColor}
-          disabled={isChecking || isChecked}
+          whenBackgroundColor={swipeWhenBackgroundColor}
+          whenIconColor={swipeWhenIconColor}
+          selectBackgroundColor={swipeSelectBackgroundColor}
+          selectIconColor={swipeSelectIconColor}
+          disabled={isChecking || isChecked || isSelectionMode}
         >
           <Animated.View
             className="flex-row items-center px-2 py-2"
             exiting={FadeOut.duration(240)}
+            style={{
+              borderRadius: 11,
+              backgroundColor: isSelected
+                ? swipeActiveBackgroundColor
+                : "transparent",
+            }}
           >
+          {isLiftedDateRow && !isSelected ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  borderRadius: 11,
+                  backgroundColor: withOpacity(
+                    COLOR_TOKENS[colorMode]["bg.input"],
+                    colorMode === "dark" ? 0.96 : 0.98,
+                  ),
+                  borderWidth: 0.5,
+                  borderColor: withOpacity(
+                    COLOR_TOKENS[colorMode]["text.secondary"],
+                    colorMode === "dark" ? 0.38 : 0.16,
+                  ),
+                  shadowColor: "#000000",
+                  shadowOpacity: colorMode === "dark" ? 0.28 : 0.12,
+                  shadowRadius: 10,
+                  shadowOffset: { width: 0, height: 5 },
+                  elevation: 7,
+                },
+                liftedRowOverlayAnimatedStyle,
+              ]}
+            />
+          ) : null}
           <TouchableOpacity
             onPress={() => void handleCompleteJob(job.id)}
             disabled={isChecking || isChecked}
@@ -919,14 +1368,7 @@ export default function JobsScreen() {
           )}
 
           <View className="flex-1">
-            <Pressable
-              onPress={() =>
-                router.push({
-                  pathname: "/job/[id]",
-                  params: { id: job.id },
-                })
-              }
-            >
+            <Pressable onPress={handleRowPress}>
               <View className="flex-row items-center">
                 {isTodayJob ? (
                   <View className="mr-1.5 self-center" style={{ marginTop: 1 }}>
@@ -954,8 +1396,36 @@ export default function JobsScreen() {
               </Text>
             </View>
           ) : null}
+
+          {isSelectionMode ? (
+            <TouchableOpacity
+              onPress={() => toggleJobSelection(job.id)}
+              activeOpacity={0.7}
+              hitSlop={8}
+              className="ml-3 items-center justify-center self-center"
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: 11,
+                borderWidth: 1.5,
+                borderColor: isSelected ? selectionFillColor : selectionCircleColor,
+                backgroundColor: "transparent",
+              }}
+            >
+              {isSelected ? (
+                <View
+                  style={{
+                    width: 14,
+                    height: 14,
+                    borderRadius: 7,
+                    backgroundColor: selectionFillColor,
+                  }}
+                />
+              ) : null}
+            </TouchableOpacity>
+          ) : null}
           </Animated.View>
-        </SwipeableWhenRow>
+        </SwipeableJobRow>
       </Animated.View>
     );
   };
@@ -964,38 +1434,78 @@ export default function JobsScreen() {
     task: LoggedJob,
     dateLabel: string,
     dateLabelClassName = "mr-3 font-medium text-footer",
-  ) => (
-    <View
-      key={task.id}
-      className="flex-row items-center py-3"
-    >
-      <View
-        className="mr-3 items-center justify-center"
-        style={{
-          width: SIZE_TOKENS.quickTaskCheckbox,
-          height: SIZE_TOKENS.quickTaskCheckbox,
-          borderRadius: RADIUS_TOKENS.xs,
-          borderWidth: BORDER_WIDTH_TOKENS.subtle,
-          borderColor: completedAccentColor,
-          backgroundColor: completedAccentColor,
+  ) => {
+    const isSelected = selectedIds.has(task.id);
+    return (
+      <Pressable
+        key={task.id}
+        onPress={() => {
+          if (isSelectionMode) {
+            toggleJobSelection(task.id);
+          }
         }}
+        className="flex-row items-center px-2 py-3"
+        style={
+          isSelected
+            ? { backgroundColor: swipeActiveBackgroundColor, borderRadius: 11 }
+            : undefined
+        }
       >
-        <Icon name="check" size={10} color={checkedIconColor} />
-      </View>
-      <Text
-        className={dateLabelClassName}
-        style={{ color: completedAccentColor }}
-      >
-        {dateLabel}
-      </Text>
-      <Text
-        className="flex-1 font-regular text-label-sm"
-        style={{ color: completedTitleColor }}
-      >
-        {task.title}
-      </Text>
-    </View>
-  );
+        <View
+          className="mr-3 items-center justify-center"
+          style={{
+            width: SIZE_TOKENS.quickTaskCheckbox,
+            height: SIZE_TOKENS.quickTaskCheckbox,
+            borderRadius: RADIUS_TOKENS.xs,
+            borderWidth: BORDER_WIDTH_TOKENS.subtle,
+            borderColor: completedAccentColor,
+            backgroundColor: completedAccentColor,
+          }}
+        >
+          <Icon name="check" size={10} color={checkedIconColor} />
+        </View>
+        <Text
+          className={dateLabelClassName}
+          style={{ color: completedAccentColor }}
+        >
+          {dateLabel}
+        </Text>
+        <Text
+          className="flex-1 font-regular text-label-sm"
+          style={{ color: completedTitleColor }}
+        >
+          {task.title}
+        </Text>
+        {isSelectionMode ? (
+          <TouchableOpacity
+            onPress={() => toggleJobSelection(task.id)}
+            activeOpacity={0.7}
+            hitSlop={8}
+            className="ml-3 items-center justify-center self-center"
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 11,
+              borderWidth: 1.5,
+              borderColor: isSelected ? selectionFillColor : selectionCircleColor,
+              backgroundColor: "transparent",
+            }}
+          >
+            {isSelected ? (
+              <View
+                style={{
+                  width: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  backgroundColor: selectionFillColor,
+                }}
+              />
+            ) : null}
+          </TouchableOpacity>
+        ) : null}
+      </Pressable>
+    );
+  };
 
   return (
     <View className="flex-1 bg-things-bg">
@@ -1054,6 +1564,10 @@ export default function JobsScreen() {
                       isExpanded={isInlineComposerExpanded}
                       allowClientAssignment={false}
                       syncFromTaskWhenCollapsed={false}
+                      onCollapseWithoutChanges={handleInlineComposerCollapseWithoutChanges}
+                      onDraftStateChange={(_, isDirty) =>
+                        setIsInlineComposerDirty(isDirty)
+                      }
                       onCheckPress={() => {}}
                       onToggleExpanded={() =>
                         setIsInlineComposerExpanded((current) => !current)
@@ -1068,7 +1582,11 @@ export default function JobsScreen() {
               <Pressable
                 onPress={() => {
                   if (isInlineComposerVisible && isInlineComposerExpanded) {
-                    setIsInlineComposerExpanded(false);
+                    if (isInlineComposerDirty) {
+                      setIsInlineComposerExpanded(false);
+                    } else {
+                      hideInlineComposer();
+                    }
                   }
                 }}
               >
@@ -1077,14 +1595,23 @@ export default function JobsScreen() {
                     return (
                       <Animated.View
                         key={item.key}
-                        layout={
-                          isDateRelayoutAnimating
-                            ? LinearTransition.duration(220)
-                            : SECTION_STATIC_LAYOUT
-                        }
+                        layout={SECTION_STATIC_LAYOUT}
                       >
                         {renderSectionHeader(item.title, item.spacingClassName)}
                       </Animated.View>
+                    );
+                  }
+
+                  if (item.type === "showMore") {
+                    return (
+                      <SectionMoreToggle
+                        key={item.key}
+                        isExpanded={item.isExpanded}
+                        hiddenCount={item.hiddenCount}
+                        onPress={() => toggleSectionExpanded(item.sectionKey)}
+                        textColor={COLOR_TOKENS[colorMode]["text.secondary"]}
+                        pressedBg={loggedToggleBgPressed}
+                      />
                     );
                   }
 
@@ -1145,6 +1672,20 @@ export default function JobsScreen() {
           )}
         </View>
       </Animated.ScrollView>
+
+      <SelectionActionBar
+        visible={isSelectionMode}
+        bottom={Math.max(insets.bottom + 8, 18)}
+        bg={actionBarBg}
+        border={actionBarBorder}
+        primaryColor={actionBarPrimaryColor}
+        colorMode={colorMode}
+        actions={[
+          { key: "cancel", label: "Cancel", icon: "close", onPress: clearSelection },
+          { key: "when", label: "When", icon: "upcoming", onPress: openWhenForSelection },
+          { key: "delete", label: "Delete", icon: "trash", onPress: () => void handleDeleteSelected() },
+        ]}
+      />
 
       <WhenCalendarModal
         visible={isWhenModalOpen}

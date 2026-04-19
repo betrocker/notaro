@@ -247,6 +247,8 @@ export default function InlineTodoAccordion({
   isExpanded,
   allowClientAssignment = true,
   syncFromTaskWhenCollapsed = true,
+  onCollapseWithoutChanges,
+  onDraftStateChange,
   onCheckPress,
   onToggleExpanded,
   onFadeComplete,
@@ -264,6 +266,8 @@ export default function InlineTodoAccordion({
   isExpanded: boolean;
   allowClientAssignment?: boolean;
   syncFromTaskWhenCollapsed?: boolean;
+  onCollapseWithoutChanges?: (taskId: string) => void;
+  onDraftStateChange?: (taskId: string, isDirty: boolean) => void;
   onCheckPress: (taskId: string) => void;
   onToggleExpanded: (taskId: string) => void;
   onFadeComplete: (taskId: string) => void;
@@ -383,7 +387,7 @@ export default function InlineTodoAccordion({
 
   const commitChanges = useCallback(async () => {
     if (isSaving) {
-      return;
+      return "busy" as const;
     }
 
     const nextTitle = title.trim();
@@ -403,12 +407,12 @@ export default function InlineTodoAccordion({
       checklistSignature !== savedChecklistSignature;
 
     if (!hasDraftChanges) {
-      return;
+      return "noop" as const;
     }
 
     if (!nextTitle) {
       setErrorMessage("Title can't be empty.");
-      return;
+      return "error" as const;
     }
 
     setIsSaving(true);
@@ -431,10 +435,12 @@ export default function InlineTodoAccordion({
       setSavedDeadlineDateIso(deadlineDateIso);
       setSavedChecklistSignature(checklistSignature);
       setErrorMessage(null);
+      return "saved" as const;
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Couldn't save the task.",
       );
+      return "error" as const;
     } finally {
       setIsSaving(false);
     }
@@ -455,12 +461,56 @@ export default function InlineTodoAccordion({
     whenSelection,
   ]);
 
+  const hasDraftChangesOnCollapse = useCallback(() => {
+    const nextTitle = title.trim();
+    const nextNotes = notes.trim();
+    const nextWhenKey = whenSelectionKey(whenSelection);
+    const deadlineDateIso = deadlineDate ? toDateOnlyIso(deadlineDate) : null;
+    const checklistSignature = JSON.stringify(
+      normalizeChecklistTexts([
+        ...checklistItemsRef.current.map((item) => item.text),
+        checklistDraft.trim(),
+      ]),
+    );
+
+    return (
+      nextTitle !== savedTitle.trim() ||
+      nextNotes !== savedNotes.trim() ||
+      selectedClientId !== savedClientId ||
+      nextWhenKey !== savedWhenKey ||
+      deadlineDateIso !== savedDeadlineDateIso ||
+      checklistSignature !== savedChecklistSignature
+    );
+  }, [
+    checklistDraft,
+    deadlineDate,
+    notes,
+    savedChecklistSignature,
+    savedClientId,
+    savedDeadlineDateIso,
+    savedNotes,
+    savedTitle,
+    savedWhenKey,
+    selectedClientId,
+    title,
+    whenSelection,
+  ]);
+
+  useEffect(() => {
+    onDraftStateChange?.(task.id, hasDraftChangesOnCollapse());
+  }, [hasDraftChangesOnCollapse, onDraftStateChange, task.id]);
+
   useEffect(() => {
     if (isExpanded) {
       return;
     }
 
     if (wasExpandedRef.current) {
+      if (onCollapseWithoutChanges && !hasDraftChangesOnCollapse()) {
+        onCollapseWithoutChanges(task.id);
+        return;
+      }
+
       const trimmedDraft = checklistDraft.trim();
       if (trimmedDraft.length > 0) {
         const nextItems = [
@@ -514,6 +564,7 @@ export default function InlineTodoAccordion({
     setErrorMessage(null);
   }, [
     commitChanges,
+    hasDraftChangesOnCollapse,
     isExpanded,
     task.checklistItems,
     task.clientId,

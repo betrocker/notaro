@@ -1,4 +1,4 @@
-﻿import { BlurView } from "expo-blur";
+import { BlurView } from "expo-blur";
 import { useColorScheme } from "nativewind";
 import React, { useState } from "react";
 import {
@@ -20,42 +20,25 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { Icon } from "./Icon";
+import { Icon, IconName } from "./Icon";
 
 const SPRING_CONFIG = { damping: 56, stiffness: 620, mass: 0.7 };
 const BUTTON_OFFSCREEN = 150;
 
+export type MagicMenuAction = {
+  key: string;
+  label: string;
+  description: string;
+  icon: IconName;
+  iconColor?: string;
+  onPress: () => void;
+};
+
 interface ThingsMagicMenuProps {
-  onNewTask: () => void;
-  onNewProject: () => void;
-  onNewClient: () => void;
+  actions: MagicMenuAction[];
   bottomOffset?: number;
   onPrimaryActionPress?: () => void;
 }
-
-const ACTIONS = [
-  {
-    key: "task",
-    label: "New Task",
-    description: "Quickly add a new task to your inbox.",
-    icon: "plusfab" as const,
-    action: "task" as const,
-  },
-  {
-    key: "project",
-    label: "New Project",
-    description: "Define a goal, then work toward it one task at a time.",
-    icon: "project" as const,
-    action: "project" as const,
-  },
-  {
-    key: "client",
-    label: "New Client",
-    description: "Create a client profile for future work and follow-ups.",
-    icon: "clipboard" as const,
-    action: "client" as const,
-  },
-];
 
 function withOpacity(hexColor: string, opacity: number) {
   const sanitized = hexColor.replace("#", "");
@@ -75,9 +58,7 @@ function withOpacity(hexColor: string, opacity: number) {
 }
 
 export default function MagicMenu({
-  onNewTask,
-  onNewProject,
-  onNewClient,
+  actions,
   bottomOffset = 0,
   onPrimaryActionPress,
 }: ThingsMagicMenuProps) {
@@ -203,47 +184,36 @@ export default function MagicMenu({
               tint={isDark ? "dark" : "light"}
               style={{ backgroundColor: blurOverlayColor }}
             >
-              {ACTIONS.map((item) => {
-                const onPress =
-                  item.action === "task"
-                    ? onNewTask
-                    : item.action === "project"
-                      ? onNewProject
-                      : onNewClient;
-                const iconColor =
-                  item.action === "task"
-                    ? COLOR_TOKENS.dark["icon.inbox"]
-                    : item.action === "project"
-                      ? COLOR_TOKENS.dark["primary.default"]
-                      : "var(--color-logbook)";
+              {actions.map((item) => (
+                <TouchableOpacity
+                  key={item.key}
+                  className="flex-row items-start px-5 py-4"
+                  onPress={() => closeMenu(item.onPress)}
+                >
+                  <View className="mr-3 pt-0.5">
+                    <Icon
+                      name={item.icon}
+                      size={20}
+                      color={item.iconColor ?? COLOR_TOKENS.dark["text.primary"]}
+                    />
+                  </View>
 
-                return (
-                  <TouchableOpacity
-                    key={item.key}
-                    className="flex-row items-start px-5 py-4"
-                    onPress={() => closeMenu(onPress)}
-                  >
-                    <View className="mr-3 pt-0.5">
-                      <Icon name={item.icon} size={20} color={iconColor} />
-                    </View>
-
-                    <View className="flex-1">
-                      <Text
-                        className="font-semibold text-label"
-                        style={{ color: itemTextColor }}
-                      >
-                        {item.label}
-                      </Text>
-                      <Text
-                        className="mt-0.5 font-regular text-footer"
-                        style={{ color: secondaryTextColor }}
-                      >
-                        {item.description}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
+                  <View className="flex-1">
+                    <Text
+                      className="font-semibold text-label"
+                      style={{ color: itemTextColor }}
+                    >
+                      {item.label}
+                    </Text>
+                    <Text
+                      className="mt-0.5 font-regular text-footer"
+                      style={{ color: secondaryTextColor }}
+                    >
+                      {item.description}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
             </BlurView>
           </Animated.View>
         ) : null}

@@ -9,6 +9,7 @@ import { InlineComposer } from "@/components/InlineComposer";
 import { QuickFindPullDown } from "@/components/QuickFindPullDown";
 import { AppText as Text } from "@/components/ui";
 import { COLOR_TOKENS, SPACING_TOKENS } from "@/lib/design-system/tokens";
+import { subscribeHomeInlineProjectComposer } from "@/lib/homeInlineProjectComposer";
 import { useFocusEffect } from "@react-navigation/native";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
@@ -175,6 +176,7 @@ export default function HomeScreen() {
   const { colorScheme } = useColorScheme();
   const theme = getThemeTokens(colorScheme === "dark");
   const { newProject } = useLocalSearchParams<{ newProject?: string }>();
+  const handledNewProjectTokenRef = useRef<string | null>(null);
   const projectsDividerColor = withOpacity(COLOR_TOKENS.dark["text.primary"], 0.15);
   const [isCreatingInline, setIsCreatingInline] = useState(false);
   const [inlineText, setInlineText] = useState("");
@@ -209,6 +211,12 @@ export default function HomeScreen() {
     0.72,
   );
   const inlineEditorBg = withOpacity(COLOR_TOKENS.dark["primary.default"], 0.78);
+  const openInlineProjectComposer = useCallback(() => {
+    setInlineText("");
+    setIsInlineSaving(false);
+    inlineFade.setValue(1);
+    setIsCreatingInline(true);
+  }, [inlineFade]);
 
   const loadHomeData = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -257,16 +265,24 @@ export default function HomeScreen() {
   );
 
   useEffect(() => {
-    if (newProject !== "1") {
+    return subscribeHomeInlineProjectComposer(() => {
+      openInlineProjectComposer();
+    });
+  }, [openInlineProjectComposer]);
+
+  useEffect(() => {
+    const newProjectToken = Array.isArray(newProject) ? newProject[0] : newProject;
+    if (!newProjectToken) {
+      handledNewProjectTokenRef.current = null;
       return;
     }
+    if (handledNewProjectTokenRef.current === newProjectToken) {
+      return;
+    }
+    handledNewProjectTokenRef.current = newProjectToken;
 
-    setInlineText("");
-    setIsInlineSaving(false);
-    inlineFade.setValue(1);
-    setIsCreatingInline(true);
-    router.replace("/");
-  }, [inlineFade, newProject]);
+    openInlineProjectComposer();
+  }, [newProject, openInlineProjectComposer]);
 
   const handleInlineSubmit = async () => {
     if (inlineSubmitLockRef.current) {

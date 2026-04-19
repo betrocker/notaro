@@ -19,9 +19,13 @@ import { AuthProvider, useAuth } from "@/components/AuthProvider";
 import ActionTabBar, {
   resolveActionTabFromSegment,
 } from "@/components/ActionTabBar";
-import MagicMenu from "@/components/MagicMenu";
+import MagicMenu, { MagicMenuAction } from "@/components/MagicMenu";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
 import { triggerJobsInlineComposer } from "@/lib/jobsInlineComposer";
+import {
+  getJobsSelectionActive,
+  subscribeJobsSelectionActive,
+} from "@/lib/jobsSelectionMode";
 import {
   DEFAULT_TEXT_MAX_MULTIPLIER,
   DEFAULT_TEXT_STYLE,
@@ -154,6 +158,15 @@ function RootNavigator({
 }) {
   const segments = useSegments();
   const { isAuthReady, session } = useAuth();
+  const [isJobsSelectionActive, setIsJobsSelectionActive] = useState(
+    getJobsSelectionActive(),
+  );
+
+  useEffect(() => {
+    return subscribeJobsSelectionActive((active) => {
+      setIsJobsSelectionActive(active);
+    });
+  }, []);
 
   if (!isAuthReady) {
     return null;
@@ -166,7 +179,8 @@ function RootNavigator({
   const inSettings = rootSegment === "settings";
   const inClients = rootSegment === "clients";
   const inNewTodo = rootSegment === "new-todo";
-  const inModalSurface = inSettings || inClients || inNewTodo;
+  const inNewPayment = rootSegment === "new-payment";
+  const inModalSurface = inSettings || inClients || inNewTodo || inNewPayment;
   const showActionTabBar =
     !!session && !inAuth && !onWelcome && !inModalSurface;
   const activeTab = resolveActionTabFromSegment(rootSegment);
@@ -194,6 +208,51 @@ function RootNavigator({
   }
 
   const showGlobalMagicMenu = showActionTabBar;
+  const defaultMagicActions: MagicMenuAction[] = [
+    {
+      key: "project",
+      label: "New Project",
+      description: "Open the full composer modal for a new project.",
+      icon: "project",
+      iconColor: COLOR_TOKENS.dark["primary.default"],
+      onPress: () => router.push("/new-todo"),
+    },
+    {
+      key: "client",
+      label: "New Client",
+      description: "Create a client profile for future work and follow-ups.",
+      icon: "client",
+      iconColor: "var(--color-logbook)",
+      onPress: () => router.push("/clients"),
+    },
+  ];
+  const homeMagicActions: MagicMenuAction[] = [
+    {
+      key: "project",
+      label: "New Project",
+      description: "Open the full composer modal for a new project.",
+      icon: "project",
+      iconColor: COLOR_TOKENS.dark["primary.default"],
+      onPress: () => router.push("/new-todo"),
+    },
+    {
+      key: "client",
+      label: "New Client",
+      description: "Open the existing client modal and add a new client.",
+      icon: "client",
+      iconColor: "var(--color-logbook)",
+      onPress: () => router.push("/clients"),
+    },
+    {
+      key: "payment",
+      label: "New Payment",
+      description: "Register a new payment with amount, date, and note.",
+      icon: "dollar",
+      iconColor: "var(--color-today)",
+      onPress: () => router.push("/new-payment"),
+    },
+  ];
+  const magicMenuActions = activeTab === "home" ? homeMagicActions : defaultMagicActions;
 
   return (
     <View style={{ flex: 1 }}>
@@ -270,28 +329,32 @@ function RootNavigator({
             contentStyle: { backgroundColor: "transparent" },
           }}
         />
+        <Stack.Screen
+          name="new-payment"
+          options={{
+            presentation: "transparentModal",
+            animation: "none",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
       </Stack>
 
       {showGlobalMagicMenu ? (
         <MagicMenu
-          onNewTask={() => router.push("/new-todo")}
+          actions={magicMenuActions}
           onPrimaryActionPress={
             rootSegment === "jobs"
               ? triggerJobsInlineComposer
               : undefined
           }
-          onNewProject={() =>
-            router.push({
-              pathname: "/",
-              params: { newProject: "1" },
-            })
-          }
-          onNewClient={() => console.log("New Client is not implemented yet")}
           bottomOffset={74}
         />
       ) : null}
 
-      {showActionTabBar ? <ActionTabBar activeTab={activeTab} /> : null}
+      {showActionTabBar ? (
+        <ActionTabBar activeTab={activeTab} hidden={isJobsSelectionActive} />
+      ) : null}
     </View>
   );
 }

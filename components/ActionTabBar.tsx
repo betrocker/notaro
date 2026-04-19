@@ -184,8 +184,10 @@ function ActionTabItem({
 
 export default function ActionTabBar({
   activeTab,
+  hidden = false,
 }: {
   activeTab: ActionTabKey;
+  hidden?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
@@ -209,6 +211,8 @@ export default function ActionTabBar({
   );
   const activeText = palette["text.primary"];
   const progress = useSharedValue(0);
+  const hideProgress = useSharedValue(hidden ? 1 : 0);
+  const slideOutDistance = bottom + 80;
 
   useEffect(() => {
     progress.value = withSpring(1, {
@@ -218,17 +222,29 @@ export default function ActionTabBar({
     });
   }, [progress]);
 
+  useEffect(() => {
+    hideProgress.value = withTiming(hidden ? 1 : 0, {
+      duration: hidden ? 220 : 260,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [hidden, hideProgress]);
+
   const containerAnimatedStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(progress.value, [0, 1], [0, 1]),
+    opacity: interpolate(progress.value, [0, 1], [0, 1]) *
+      interpolate(hideProgress.value, [0, 1], [1, 0]),
     transform: [
-      { translateY: interpolate(progress.value, [0, 1], [14, 0]) },
+      {
+        translateY:
+          interpolate(progress.value, [0, 1], [14, 0]) +
+          interpolate(hideProgress.value, [0, 1], [0, slideOutDistance]),
+      },
       { scale: interpolate(progress.value, [0, 1], [0.94, 1]) },
     ],
   }));
 
   return (
     <View
-      pointerEvents="box-none"
+      pointerEvents={hidden ? "none" : "box-none"}
       className="absolute left-0 right-0 items-center"
       style={{ bottom, zIndex: 42 }}
     >

@@ -121,6 +121,10 @@ const ICON_MAP = {
     ios: "tag",
     android: "tag",
   },
+  dollar: {
+    ios: "dollarsign.circle",
+    android: "currency-usd",
+  },
   client: {
     ios: "person.2",
     android: "account-group-outline",
@@ -152,6 +156,10 @@ const ICON_MAP = {
   trash: {
     ios: "trash",
     android: "delete",
+  },
+  checklist: {
+    ios: "checklist",
+    android: "format-list-checks",
   },
   flag: {
     ios: "flag.fill",
