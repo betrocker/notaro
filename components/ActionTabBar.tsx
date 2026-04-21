@@ -32,7 +32,7 @@ type ActionTabConfig = {
 
 const TABS: ActionTabConfig[] = [
   { key: "home", label: "Home", icon: "home", href: "/" },
-  { key: "jobs", label: "Jobs", icon: "briefcase", href: "/jobs" },
+  { key: "jobs", label: "Projects", icon: "briefcase", href: "/jobs" },
   { key: "clients", label: "Clients", icon: "client", href: "/clients-home" },
 ];
 const TAB_BASE_STYLE = {
@@ -84,6 +84,7 @@ export function resolveActionTabFromSegment(
     segment === "job" ||
     segment === "today" ||
     segment === "inbox" ||
+    segment === "invoices" ||
     segment === "upcoming" ||
     segment === "anytime" ||
     segment === "someday" ||

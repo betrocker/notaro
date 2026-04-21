@@ -4,6 +4,7 @@ import { AppText as Text } from "@/components/ui";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
 import { fetchHomeData } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { useFocusEffect } from "@react-navigation/native";
 import { Stack, router } from "expo-router";
 import { useColorScheme } from "nativewind";
@@ -47,6 +48,7 @@ export default function ClientsHomeScreen() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
   const dividerColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.22);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
 
@@ -145,6 +147,7 @@ export default function ClientsHomeScreen() {
       <ProjectHeader
         title="Clients"
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.replace("/")}
       />
 
@@ -152,6 +155,7 @@ export default function ClientsHomeScreen() {
         className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 132, flexGrow: 1 }}
       >
         <Animated.View

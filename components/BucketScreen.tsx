@@ -1,6 +1,7 @@
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
 import ProjectHeader from "@/components/ProjectHeader";
 import { Icon, IconName } from "@/components/Icon";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { router, Stack } from "expo-router";
 import { useColorScheme } from "nativewind";
 import React from "react";
@@ -35,14 +36,17 @@ export function BucketScreen({
   title,
   icon,
   accentColor,
+  emptyStateMessage,
 }: {
   title: string;
   icon: IconName;
   accentColor: string;
+  emptyStateMessage?: string;
 }) {
   const { colorScheme } = useColorScheme();
   const colorMode = colorScheme === "dark" ? "dark" : "light";
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
 
   const scrollHandler = useAnimatedScrollHandler({
@@ -104,6 +108,7 @@ export function BucketScreen({
       <ProjectHeader
         title={title}
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.back()}
       />
 
@@ -111,6 +116,7 @@ export function BucketScreen({
         className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 32, flexGrow: 1 }}
       >
         <Animated.View
@@ -125,6 +131,11 @@ export function BucketScreen({
 
         <View className="flex-1 items-center justify-center">
           <Icon name={icon} size={96} color={emptyIconColor} />
+          {emptyStateMessage ? (
+            <Text className="mt-4 font-regular text-label-sm text-things-muted">
+              {emptyStateMessage}
+            </Text>
+          ) : null}
         </View>
       </Animated.ScrollView>
 

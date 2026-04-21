@@ -1,16 +1,27 @@
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
-import { ChevronLeft } from "lucide-react-native";
+import { SPACING_TOKENS } from "@/lib/design-system/tokens";
+import { QuickFindPullDown } from "@/components/QuickFindPullDown";
+import { ChevronDown, ChevronLeft } from "lucide-react-native";
+import { router } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React from "react";
+import React, { useCallback, useRef } from "react";
 import { View, TouchableOpacity } from "react-native";
-import type { StyleProp, ViewStyle } from "react-native";
+import type { GestureResponderEvent, StyleProp, ViewStyle } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import Animated from "react-native-reanimated";
+import Animated, {
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  type SharedValue,
+} from "react-native-reanimated";
 
 interface ProjectHeaderProps {
   title: string;
   titleAnimatedStyle: StyleProp<ViewStyle>;
   onBack: () => void;
+  onTitleActionPress?: (event: GestureResponderEvent) => void;
+  titleActionDisabled?: boolean;
+  pullDownScrollY?: SharedValue<number>;
 }
 
 function darkenHex(hexColor: string, factor: number) {
@@ -33,6 +44,9 @@ export default function ProjectHeader({
   title,
   titleAnimatedStyle,
   onBack,
+  onTitleActionPress,
+  titleActionDisabled = false,
+  pullDownScrollY,
 }: ProjectHeaderProps) {
   const { colorScheme } = useColorScheme();
   const colorMode = colorScheme === "dark" ? "dark" : "light";
@@ -41,6 +55,45 @@ export default function ProjectHeader({
       ? COLOR_TOKENS.dark["text.secondary"]
       : COLOR_TOKENS.light["text.secondary"];
   const actionIconColor = darkenHex(baseIconColor, 0.78);
+  const quickFindTriggerLockRef = useRef(false);
+  const handleQuickFindSwipeTrigger = useCallback(() => {
+    if (quickFindTriggerLockRef.current) {
+      return;
+    }
+
+    quickFindTriggerLockRef.current = true;
+    router.push("/quick-find" as never);
+    setTimeout(() => {
+      quickFindTriggerLockRef.current = false;
+    }, 500);
+  }, []);
+
+  const quickFindPullStyle = useAnimatedStyle(() => {
+    const scrollValue = pullDownScrollY?.value ?? 0;
+    const pullDistance = Math.max(0, -scrollValue);
+    const progress = Math.max(0, Math.min(1, pullDistance / 54));
+
+    return {
+      opacity: progress,
+      transform: [
+        { translateY: -16 + progress * 16 },
+        { scale: 0.92 + progress * 0.08 },
+      ],
+    };
+  }, [pullDownScrollY]);
+
+  useAnimatedReaction(
+    () => {
+      const scrollValue = pullDownScrollY?.value ?? 0;
+      return scrollValue <= -76;
+    },
+    (shouldOpen, previousShouldOpen) => {
+      if (shouldOpen && !previousShouldOpen) {
+        runOnJS(handleQuickFindSwipeTrigger)();
+      }
+    },
+    [pullDownScrollY, handleQuickFindSwipeTrigger],
+  );
 
   return (
     <SafeAreaView
@@ -62,17 +115,58 @@ export default function ProjectHeader({
 
         <View className="flex-1 items-center justify-center">
           <Animated.View style={titleAnimatedStyle}>
-            <Animated.Text
-              className="font-semibold text-body-lg text-things-text"
-              numberOfLines={1}
-            >
-              {title}
-            </Animated.Text>
+            {onTitleActionPress ? (
+              <TouchableOpacity
+                onPress={onTitleActionPress}
+                disabled={titleActionDisabled}
+                activeOpacity={0.75}
+                className="flex-row items-center rounded-full px-1.5 py-0.5"
+              >
+                <Animated.Text
+                  className="font-semibold text-body-lg text-things-text"
+                  numberOfLines={1}
+                  style={{ maxWidth: "90%" }}
+                >
+                  {title}
+                </Animated.Text>
+                <ChevronDown
+                  size={16}
+                  color={actionIconColor}
+                  strokeWidth={1.8}
+                  style={{ marginLeft: 2 }}
+                />
+              </TouchableOpacity>
+            ) : (
+              <Animated.Text
+                className="font-semibold text-body-lg text-things-text"
+                numberOfLines={1}
+              >
+                {title}
+              </Animated.Text>
+            )}
           </Animated.View>
         </View>
 
         <View className="h-11 w-11" />
       </View>
+
+      {pullDownScrollY ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            {
+              position: "absolute",
+              left: SPACING_TOKENS.lg,
+              right: SPACING_TOKENS.lg,
+              top: SPACING_TOKENS.sm,
+              zIndex: 35,
+            },
+            quickFindPullStyle,
+          ]}
+        >
+          <QuickFindPullDown />
+        </Animated.View>
+      ) : null}
     </SafeAreaView>
   );
 }

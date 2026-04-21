@@ -16,16 +16,11 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "@/components/AuthProvider";
-import ActionTabBar, {
-  resolveActionTabFromSegment,
-} from "@/components/ActionTabBar";
+import { resolveActionTabFromSegment } from "@/components/ActionTabBar";
 import MagicMenu, { MagicMenuAction } from "@/components/MagicMenu";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
 import { triggerJobsInlineComposer } from "@/lib/jobsInlineComposer";
-import {
-  getJobsSelectionActive,
-  subscribeJobsSelectionActive,
-} from "@/lib/jobsSelectionMode";
+import { recordQuickFindRecentBySegment } from "@/lib/quickFind";
 import {
   DEFAULT_TEXT_MAX_MULTIPLIER,
   DEFAULT_TEXT_STYLE,
@@ -158,32 +153,34 @@ function RootNavigator({
 }) {
   const segments = useSegments();
   const { isAuthReady, session } = useAuth();
-  const [isJobsSelectionActive, setIsJobsSelectionActive] = useState(
-    getJobsSelectionActive(),
-  );
+
+  const rootSegment = segments[0] as string | undefined;
+  const authScreen = segments[1] as string | undefined;
 
   useEffect(() => {
-    return subscribeJobsSelectionActive((active) => {
-      setIsJobsSelectionActive(active);
-    });
-  }, []);
+    if (!isAuthReady || !session) {
+      return;
+    }
+
+    void recordQuickFindRecentBySegment(rootSegment);
+  }, [isAuthReady, rootSegment, session]);
 
   if (!isAuthReady) {
     return null;
   }
 
-  const rootSegment = segments[0] as string | undefined;
-  const authScreen = segments[1] as string | undefined;
   const inAuth = rootSegment === "auth";
   const onWelcome = rootSegment === "welcome";
   const inSettings = rootSegment === "settings";
   const inClients = rootSegment === "clients";
   const inNewTodo = rootSegment === "new-todo";
   const inNewPayment = rootSegment === "new-payment";
-  const inModalSurface = inSettings || inClients || inNewTodo || inNewPayment;
-  const showActionTabBar =
-    !!session && !inAuth && !onWelcome && !inModalSurface;
+  const inQuickFind = rootSegment === "quick-find";
+  const inModalSurface =
+    inSettings || inClients || inNewTodo || inNewPayment || inQuickFind;
   const activeTab = resolveActionTabFromSegment(rootSegment);
+  const showGlobalMagicMenu =
+    !!session && !inAuth && !onWelcome && !inModalSurface;
 
   if (!session) {
     if (
@@ -207,7 +204,6 @@ function RootNavigator({
     }
   }
 
-  const showGlobalMagicMenu = showActionTabBar;
   const defaultMagicActions: MagicMenuAction[] = [
     {
       key: "project",
@@ -284,6 +280,7 @@ function RootNavigator({
         <Stack.Screen name="clients-home" options={{ headerShown: false }} />
         <Stack.Screen name="today" options={{ headerShown: false }} />
         <Stack.Screen name="inbox" options={{ headerShown: false }} />
+        <Stack.Screen name="invoices" options={{ headerShown: false }} />
         <Stack.Screen name="upcoming" options={{ headerShown: false }} />
         <Stack.Screen name="anytime" options={{ headerShown: false }} />
         <Stack.Screen name="someday" options={{ headerShown: false }} />
@@ -304,6 +301,15 @@ function RootNavigator({
         />
         <Stack.Screen
           name="settings"
+          options={{
+            presentation: "transparentModal",
+            animation: "fade",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+        <Stack.Screen
+          name="quick-find"
           options={{
             presentation: "transparentModal",
             animation: "fade",
@@ -348,12 +354,8 @@ function RootNavigator({
               ? triggerJobsInlineComposer
               : undefined
           }
-          bottomOffset={74}
+          bottomOffset={0}
         />
-      ) : null}
-
-      {showActionTabBar ? (
-        <ActionTabBar activeTab={activeTab} hidden={isJobsSelectionActive} />
       ) : null}
     </View>
   );

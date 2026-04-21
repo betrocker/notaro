@@ -6,6 +6,7 @@ import { TransparentModalShell } from "@/components/TransparentModalShell";
 import WhenCalendarModal from "@/components/WhenCalendarModal";
 import { AppText as Text, AppTextInput } from "@/components/ui";
 import { BlurView } from "expo-blur";
+import * as Haptics from "expo-haptics";
 import {
   BORDER_WIDTH_TOKENS,
   COLOR_TOKENS,
@@ -23,12 +24,15 @@ import {
   updateInboxTodo,
 } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { getThemeTokens } from "@/lib/theme";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import {
+  type GestureResponderEvent,
   Modal,
   Platform,
   Pressable,
@@ -43,9 +47,14 @@ import Animated, {
   FadeOut,
   LinearTransition,
   interpolate,
+  runOnJS,
+  type SharedValue,
+  useDerivedValue,
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
+  withTiming,
 } from "react-native-reanimated";
 
 function withOpacity(hexColor: string, opacity: number) {
@@ -198,6 +207,11 @@ function toDateOnlyIso(date: Date) {
 
 const NOTES_MIN_HEIGHT = 44;
 const CHECKLIST_FOCUS_RETRY_MS = 24;
+const PAYMENTS_PREVIEW_LIMIT = 3;
+const CHECKLIST_SWIPE_REVEAL_WIDTH = 64;
+const CHECKLIST_SWIPE_DELETE_TRIGGER = 42;
+const CHECKLIST_DRAG_SLOT_HEIGHT = 44;
+const CHECKLIST_REORDER_ROW_LAYOUT = LinearTransition.duration(120);
 
 type ChecklistItem = {
   id: string;
@@ -274,6 +288,403 @@ function buildChecklistStateItems(
     .filter((item): item is ChecklistStateItem => Boolean(item));
 }
 
+function SwipeableChecklistRow({
+  onDelete,
+  iconBgColor,
+  iconColor,
+  disabled = false,
+  dragIconColor,
+  dragDisabled = false,
+  isDragActive = false,
+  rowIndex,
+  dragStartIndexValue,
+  dragStepValue,
+  dragSlotHeight = CHECKLIST_DRAG_SLOT_HEIGHT,
+  dragPlaceholderColor,
+  dragPlaceholderBorderColor,
+  onDragStart,
+  onDragStep,
+  onDragEnd,
+  children,
+}: {
+  onDelete: () => void;
+  iconBgColor: string;
+  iconColor: string;
+  disabled?: boolean;
+  dragIconColor?: string;
+  dragDisabled?: boolean;
+  isDragActive?: boolean;
+  rowIndex: number;
+  dragStartIndexValue: SharedValue<number>;
+  dragStepValue: SharedValue<number>;
+  dragSlotHeight?: number;
+  dragPlaceholderColor?: string;
+  dragPlaceholderBorderColor?: string;
+  onDragStart?: () => void;
+  onDragStep?: (step: number) => void;
+  onDragEnd?: () => void;
+  children: React.ReactNode;
+}) {
+  const translateX = useSharedValue(0);
+  const gestureStartX = useSharedValue(0);
+  const actionProgress = useSharedValue(0);
+  const iconSpringProgress = useSharedValue(0);
+  const iconTravelX = useSharedValue(0);
+  const dragOffsetY = useSharedValue(0);
+  const dragLiftProgress = useSharedValue(0);
+  const dragStep = useSharedValue(0);
+  const dragSlotHeightValue = useSharedValue(dragSlotHeight);
+  const rowShiftYValue = useDerivedValue(() => {
+    const startIndex = dragStartIndexValue.value;
+    const step = dragStepValue.value;
+    if (startIndex < 0 || step === 0) {
+      return 0;
+    }
+
+    const targetIndex = startIndex + step;
+    const slotHeight = Math.max(1, dragSlotHeightValue.value);
+
+    if (isDragActive) {
+      return (targetIndex - startIndex) * slotHeight;
+    }
+
+    if (targetIndex > startIndex && rowIndex > startIndex && rowIndex <= targetIndex) {
+      return -slotHeight;
+    }
+
+    if (targetIndex < startIndex && rowIndex >= targetIndex && rowIndex < startIndex) {
+      return slotHeight;
+    }
+
+    return 0;
+  }, [dragSlotHeightValue, dragStartIndexValue, dragStepValue, isDragActive, rowIndex]);
+  const rowContainerStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: isDragActive ? 0 : rowShiftYValue.value }],
+  }));
+  const activePlaceholderStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: isDragActive ? rowShiftYValue.value : 0 }],
+  }));
+  const [isActionOpen, setIsActionOpen] = useState(false);
+  const [measuredRowHeight, setMeasuredRowHeight] = useState(dragSlotHeight);
+
+  const gesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(!disabled)
+        .activeOffsetX([-8, 8])
+        .failOffsetY([-10, 10])
+        .onBegin(() => {
+          gestureStartX.value = translateX.value;
+        })
+        .onUpdate((event) => {
+          const next = Math.max(
+            -CHECKLIST_SWIPE_REVEAL_WIDTH,
+            Math.min(0, gestureStartX.value + event.translationX),
+          );
+          translateX.value = next;
+          const nextProgress = Math.min(
+            1,
+            Math.max(0, Math.abs(next) / CHECKLIST_SWIPE_REVEAL_WIDTH),
+          );
+          const swipeDistance = Math.max(0, -event.translationX);
+          actionProgress.value = nextProgress;
+          iconSpringProgress.value = withSpring(nextProgress, {
+            damping: 11,
+            stiffness: 145,
+            mass: 0.52,
+          });
+          iconTravelX.value = -Math.min(54, swipeDistance * 1.18);
+        })
+        .onEnd(() => {
+          const shouldOpen = translateX.value <= -CHECKLIST_SWIPE_DELETE_TRIGGER;
+          const targetProgress = shouldOpen ? 1 : 0;
+          translateX.value = withTiming(shouldOpen ? -CHECKLIST_SWIPE_REVEAL_WIDTH : 0, {
+            duration: 180,
+          });
+          actionProgress.value = targetProgress;
+          iconSpringProgress.value = withSpring(targetProgress, {
+            damping: 9,
+            stiffness: 130,
+            mass: 0.58,
+          });
+          iconTravelX.value = withSpring(0, {
+            damping: 8,
+            stiffness: 125,
+            mass: 0.62,
+          });
+          runOnJS(setIsActionOpen)(shouldOpen);
+        }),
+    [actionProgress, disabled, gestureStartX, iconSpringProgress, iconTravelX, translateX],
+  );
+
+  const actionStyle = useAnimatedStyle(() => {
+    const progress = iconSpringProgress.value;
+    const translate = interpolate(progress, [0, 1], [34, 0], Extrapolation.CLAMP);
+    const rotate = interpolate(progress, [0, 1], [115, 0], Extrapolation.CLAMP);
+    const scale = interpolate(progress, [0, 1], [0.68, 1.08], Extrapolation.CLAMP);
+
+    return {
+      opacity: progress,
+      transform: [
+        { translateX: translate + iconTravelX.value },
+        { rotate: `${rotate}deg` },
+        { scale },
+      ],
+    };
+  });
+
+  const dragRowStyle = useAnimatedStyle(() => {
+    const liftProg = dragLiftProgress.value;
+    const scale = interpolate(liftProg, [0, 1], [1, 1.02], Extrapolation.CLAMP);
+    const translateY = isDragActive ? dragOffsetY.value : 0;
+
+    return {
+      transform: [{ translateY }, { scale }],
+      opacity: 1,
+    };
+  });
+
+  const dragHandleStyle = useAnimatedStyle(() => {
+    const progress = actionProgress.value;
+    return {
+      opacity: interpolate(progress, [0, 0.58, 1], [1, 0.38, 0], Extrapolation.CLAMP),
+      transform: [
+        {
+          translateX: interpolate(progress, [0, 1], [0, -24], Extrapolation.CLAMP),
+        },
+      ],
+    };
+  });
+
+  const dragGesture = useMemo(() => {
+    const canDrag =
+      !dragDisabled &&
+      typeof onDragStart === "function" &&
+      typeof onDragStep === "function" &&
+      typeof onDragEnd === "function";
+
+    return Gesture.Pan()
+      .enabled(canDrag)
+      .activeOffsetY([-4, 4])
+      .failOffsetX([-12, 12])
+      .onBegin(() => {
+        dragStep.value = 0;
+        dragOffsetY.value = 0;
+        dragLiftProgress.value = withTiming(1, { duration: 110 });
+        if (onDragStart) {
+          runOnJS(onDragStart)();
+        }
+      })
+      .onUpdate((event) => {
+        dragOffsetY.value = event.translationY;
+        const slotHeight = Math.max(1, dragSlotHeightValue.value);
+        const relativeSteps = event.translationY / slotHeight;
+        const nextStep =
+          relativeSteps >= 0
+            ? Math.floor(relativeSteps)
+            : Math.ceil(relativeSteps);
+        if (nextStep !== dragStep.value) {
+          dragStep.value = nextStep;
+          if (onDragStep) {
+            runOnJS(onDragStep)(nextStep);
+          }
+        }
+      })
+      .onFinalize(() => {
+        dragLiftProgress.value = withTiming(0, { duration: 140 });
+        dragOffsetY.value = withTiming(rowShiftYValue.value, { duration: 120 });
+        if (onDragEnd) {
+          runOnJS(onDragEnd)();
+        }
+      });
+  }, [
+    dragStep,
+    dragDisabled,
+    dragLiftProgress,
+    dragOffsetY,
+    onDragEnd,
+    onDragStart,
+    onDragStep,
+    rowShiftYValue,
+    dragSlotHeightValue,
+  ]);
+
+  useEffect(() => {
+    if (!disabled) {
+      return;
+    }
+
+    setIsActionOpen(false);
+    translateX.value = withTiming(0, { duration: 120 });
+    actionProgress.value = 0;
+    iconSpringProgress.value = withSpring(0, {
+      damping: 10,
+      stiffness: 140,
+      mass: 0.52,
+    });
+    iconTravelX.value = withSpring(0, {
+      damping: 9,
+      stiffness: 130,
+      mass: 0.6,
+    });
+  }, [actionProgress, disabled, iconSpringProgress, iconTravelX, translateX]);
+
+  useEffect(() => {
+    dragSlotHeightValue.value = dragSlotHeight;
+  }, [dragSlotHeight, dragSlotHeightValue]);
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <Animated.View
+        layout={isDragActive ? undefined : CHECKLIST_REORDER_ROW_LAYOUT}
+        style={[
+          isDragActive
+            ? {
+                position: "relative",
+                zIndex: 24,
+                elevation: 12,
+              }
+            : {
+                position: "relative",
+                zIndex: 1,
+                elevation: 1,
+              },
+          rowContainerStyle,
+        ]}
+      >
+        <View
+          style={{
+            position: "relative",
+            overflow: isDragActive ? "visible" : "hidden",
+            borderRadius: 12,
+          }}
+          onLayout={(event) => {
+            const nextHeight = Math.max(1, Math.round(event.nativeEvent.layout.height));
+            if (Math.abs(nextHeight - measuredRowHeight) > 1) {
+              setMeasuredRowHeight(nextHeight);
+            }
+          }}
+        >
+          {isDragActive ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                {
+                  height: Math.max(1, measuredRowHeight || dragSlotHeight),
+                  borderRadius: 12,
+                  backgroundColor: dragPlaceholderColor ?? "rgba(128,128,128,0.16)",
+                  borderWidth: 0,
+                  borderColor: dragPlaceholderBorderColor ?? "transparent",
+                },
+                activePlaceholderStyle,
+              ]}
+            />
+          ) : null}
+          <Animated.View
+            pointerEvents={isDragActive ? "none" : "auto"}
+            style={
+              isDragActive
+                ? {
+                    opacity: 0,
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                  }
+                : undefined
+            }
+          >
+            {children}
+          </Animated.View>
+          {isDragActive ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                {
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  zIndex: 40,
+                  elevation: 18,
+                },
+                dragRowStyle,
+              ]}
+            >
+              {children}
+            </Animated.View>
+          ) : null}
+          {dragIconColor ? (
+            <Animated.View
+              pointerEvents={isActionOpen ? "none" : "auto"}
+              style={[
+                {
+                  position: "absolute",
+                  right: 6,
+                  top: 0,
+                  bottom: 0,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 3,
+                },
+                dragHandleStyle,
+              ]}
+            >
+              <GestureDetector gesture={dragGesture}>
+                <View className="h-7 w-7 items-center justify-center">
+                  <Icon name="dragHandle" size={17} color={dragIconColor} />
+                </View>
+              </GestureDetector>
+            </Animated.View>
+          ) : null}
+          <Animated.View
+            pointerEvents={isActionOpen ? "auto" : "none"}
+            style={[
+              {
+                position: "absolute",
+                right: 14,
+                top: 0,
+                bottom: 0,
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 4,
+                elevation: 4,
+              },
+              actionStyle,
+            ]}
+          >
+            <TouchableOpacity
+              activeOpacity={0.82}
+              className="items-center justify-center rounded-full"
+              style={{ width: 19, height: 19, backgroundColor: iconBgColor }}
+              disabled={!isActionOpen}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                setIsActionOpen(false);
+                translateX.value = withTiming(0, { duration: 160 });
+                actionProgress.value = 0;
+                iconSpringProgress.value = withSpring(0, {
+                  damping: 10,
+                  stiffness: 140,
+                  mass: 0.52,
+                });
+                iconTravelX.value = withSpring(0, {
+                  damping: 9,
+                  stiffness: 130,
+                  mass: 0.6,
+                });
+                onDelete();
+              }}
+            >
+              <Icon name="close" size={11} color={iconColor} />
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
 export default function JobDetailScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const { colorScheme } = useColorScheme();
@@ -296,6 +707,12 @@ export default function JobDetailScreen() {
   const [checklistDraft, setChecklistDraft] = useState("");
   const [isChecklistVisible, setIsChecklistVisible] = useState(false);
   const [isChecklistComposerOpen, setIsChecklistComposerOpen] = useState(false);
+  const [draggingChecklistItemId, setDraggingChecklistItemId] = useState<string | null>(
+    null,
+  );
+  const [checklistDragRowHeight, setChecklistDragRowHeight] = useState(
+    CHECKLIST_DRAG_SLOT_HEIGHT,
+  );
   const [editingChecklistItemId, setEditingChecklistItemId] = useState<string | null>(
     null,
   );
@@ -306,12 +723,18 @@ export default function JobDetailScreen() {
     null,
   );
   const [isWhenModalOpen, setIsWhenModalOpen] = useState(false);
+  const [isRemindersModalOpen, setIsRemindersModalOpen] = useState(false);
   const [isDeadlineModalOpen, setIsDeadlineModalOpen] = useState(false);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [isPriceModalOpen, setIsPriceModalOpen] = useState(false);
   const [priceDraft, setPriceDraft] = useState("");
   const [isPriceInputFocused, setIsPriceInputFocused] = useState(false);
+  const [isPaymentsExpanded, setIsPaymentsExpanded] = useState(false);
+  const [isPaymentsTogglePressed, setIsPaymentsTogglePressed] = useState(false);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
+  const checklistDragStartIndexValue = useSharedValue(-1);
+  const checklistDragStepValue = useSharedValue(0);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const primaryTextColor = COLOR_TOKENS[colorMode]["text.primary"];
   const secondaryTextColor = COLOR_TOKENS[colorMode]["text.secondary"];
@@ -370,8 +793,44 @@ export default function JobDetailScreen() {
   const checklistDotColor = subheaderColor;
   const checklistCheckColor = secondaryTextColor;
   const checklistCompletedTextColor = withOpacity(primaryTextColor, 0.58);
+  const checklistDragHandleColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.9 : 0.74,
+  );
+  const checklistDragActiveBg =
+    colorMode === "dark" ? "#36537A" : "#D9E9FF";
+  const checklistDragPlaceholderBg = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.18 : 0.12,
+  );
+  const checklistDragPlaceholderBorderColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.38 : 0.24,
+  );
+  const checklistDragActiveBorderColor = withOpacity(
+    COLOR_TOKENS[colorMode]["primary.soft"],
+    colorMode === "dark" ? 0.6 : 0.44,
+  );
+  const checklistDragActiveShadow = Platform.select({
+    ios: {
+      shadowColor: COLOR_TOKENS[colorMode]["primary.soft"],
+      shadowOpacity: colorMode === "dark" ? 0.24 : 0.16,
+      shadowOffset: { width: 0, height: 2 },
+      shadowRadius: 8,
+    },
+    android: {
+      elevation: 2,
+    },
+    default: {},
+  });
+  const checklistDeleteIconBg = "#D15B52";
+  const checklistDeleteIconColor = COLOR_TOKENS.light["bg.base"];
   const paymentAccentColor = COLOR_TOKENS[colorMode]["primary.soft"];
   const paymentCheckIconColor = COLOR_TOKENS.light["text.primary"];
+  const paymentsToggleBgPressed = withOpacity(
+    COLOR_TOKENS[colorMode]["bg.input"],
+    colorMode === "dark" ? 0.88 : 0.86,
+  );
   const emptySectionEmbossTextStyle = {
     color: withOpacity(primaryTextColor, colorMode === "dark" ? 0.26 : 0.22),
     textShadowColor:
@@ -409,6 +868,16 @@ export default function JobDetailScreen() {
   const checklistItemsRef = useRef<ChecklistItem[]>([]);
   const savedChecklistStateItemsRef = useRef<ChecklistStateItem[]>([]);
   const skipChecklistBlurForItemIdRef = useRef<string | null>(null);
+  const checklistDragStartIndexRef = useRef<number | null>(null);
+  const checklistDragPendingStepRef = useRef(0);
+  const draggingChecklistItemIdRef = useRef<string | null>(null);
+  const draggingChecklistResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const payments = job?.payments ?? [];
+  const hiddenPaymentsCount = Math.max(payments.length - PAYMENTS_PREVIEW_LIMIT, 0);
+  const visiblePayments =
+    isPaymentsExpanded || payments.length <= PAYMENTS_PREVIEW_LIMIT
+      ? payments
+      : payments.slice(0, PAYMENTS_PREVIEW_LIMIT);
 
   const loadJob = useCallback(async () => {
     if (!id) {
@@ -448,6 +917,24 @@ export default function JobDetailScreen() {
     setNotesDraft(nextNotes);
     setSavedNotes(nextNotes);
   }, [job?.description, job?.id]);
+
+  useEffect(() => {
+    setIsPaymentsExpanded(false);
+    setIsPaymentsTogglePressed(false);
+  }, [job?.id]);
+
+  useEffect(() => {
+    if (draggingChecklistResetTimeoutRef.current) {
+      clearTimeout(draggingChecklistResetTimeoutRef.current);
+      draggingChecklistResetTimeoutRef.current = null;
+    }
+    draggingChecklistItemIdRef.current = null;
+    checklistDragStartIndexRef.current = null;
+    checklistDragPendingStepRef.current = 0;
+    checklistDragStartIndexValue.value = -1;
+    checklistDragStepValue.value = 0;
+    setDraggingChecklistItemId(null);
+  }, [checklistDragStartIndexValue, checklistDragStepValue, job?.id]);
 
   useEffect(() => {
     checklistItemsRef.current = checklistItems;
@@ -605,6 +1092,14 @@ export default function JobDetailScreen() {
 
   const closeWhenModal = useCallback(() => {
     setIsWhenModalOpen(false);
+  }, []);
+
+  const openRemindersModal = useCallback(() => {
+    setIsRemindersModalOpen(true);
+  }, []);
+
+  const closeRemindersModal = useCallback(() => {
+    setIsRemindersModalOpen(false);
   }, []);
 
   const openDeadlineModal = useCallback(() => {
@@ -1088,7 +1583,20 @@ export default function JobDetailScreen() {
   }, []);
 
   const removeChecklistItem = useCallback(
-    (itemId: string) => {
+    (itemId: string, options?: { focusNeighbor?: boolean }) => {
+      const focusNeighbor = options?.focusNeighbor ?? true;
+      if (draggingChecklistItemIdRef.current === itemId) {
+        if (draggingChecklistResetTimeoutRef.current) {
+          clearTimeout(draggingChecklistResetTimeoutRef.current);
+          draggingChecklistResetTimeoutRef.current = null;
+        }
+        draggingChecklistItemIdRef.current = null;
+        checklistDragStartIndexRef.current = null;
+        checklistDragPendingStepRef.current = 0;
+        checklistDragStartIndexValue.value = -1;
+        checklistDragStepValue.value = 0;
+        setDraggingChecklistItemId(null);
+      }
       skipChecklistBlurForItemIdRef.current = itemId;
       const currentItems = checklistItemsRef.current;
       const removedIndex = currentItems.findIndex((entry) => entry.id === itemId);
@@ -1103,7 +1611,7 @@ export default function JobDetailScreen() {
         (entry) => entry !== itemId,
       );
 
-      if (nextItems.length > 0) {
+      if (nextItems.length > 0 && focusNeighbor) {
         const previousIndex = Math.max(0, removedIndex - 1);
         const previousItem = nextItems[previousIndex];
         if (previousItem) {
@@ -1120,7 +1628,10 @@ export default function JobDetailScreen() {
         setEditingChecklistItemId(null);
         setEditingChecklistText("");
         setEditingChecklistOriginalText("");
-        setIsChecklistVisible(isChecklistComposerOpen);
+        setIsChecklistVisible(nextItems.length > 0 ? true : isChecklistComposerOpen);
+        if (!focusNeighbor) {
+          setIsChecklistComposerOpen(false);
+        }
       }
 
       setCompletedChecklistItemIds(nextCompletedIds);
@@ -1132,6 +1643,115 @@ export default function JobDetailScreen() {
       isChecklistComposerOpen,
       persistChecklistItems,
     ],
+  );
+
+  const handleChecklistDragStart = useCallback(
+    (itemId: string) => {
+      if (editingChecklistItemId !== null || isChecklistComposerOpen) {
+        return;
+      }
+
+      const currentItems = checklistItemsRef.current;
+      const startIndex = currentItems.findIndex((entry) => entry.id === itemId);
+      if (startIndex === -1) {
+        return;
+      }
+
+      if (draggingChecklistResetTimeoutRef.current) {
+        clearTimeout(draggingChecklistResetTimeoutRef.current);
+        draggingChecklistResetTimeoutRef.current = null;
+      }
+      checklistDragStartIndexRef.current = startIndex;
+      checklistDragPendingStepRef.current = 0;
+      checklistDragStartIndexValue.value = startIndex;
+      checklistDragStepValue.value = 0;
+      draggingChecklistItemIdRef.current = itemId;
+      setDraggingChecklistItemId(itemId);
+      setIsChecklistComposerOpen(false);
+    },
+    [
+      checklistDragStartIndexValue,
+      checklistDragStepValue,
+      editingChecklistItemId,
+      isChecklistComposerOpen,
+    ],
+  );
+
+  const handleChecklistDragStep = useCallback((itemId: string, step: number) => {
+    if (draggingChecklistItemIdRef.current !== itemId) {
+      return;
+    }
+
+    const startIndex = checklistDragStartIndexRef.current;
+    if (startIndex === null) {
+      return;
+    }
+
+    const currentItems = checklistItemsRef.current;
+    const currentIndex = currentItems.findIndex((entry) => entry.id === itemId);
+    if (currentIndex === -1) {
+      return;
+    }
+
+    const clampedTargetIndex = Math.max(0, Math.min(currentItems.length - 1, startIndex + step));
+    const nextStep = clampedTargetIndex - startIndex;
+    checklistDragPendingStepRef.current = nextStep;
+    checklistDragStepValue.value = nextStep;
+    void Haptics.selectionAsync();
+  }, [checklistDragStepValue]);
+
+  const handleChecklistDragEnd = useCallback(
+    (itemId: string) => {
+      if (draggingChecklistItemIdRef.current !== itemId) {
+        return;
+      }
+
+      let nextItemsAfterDrop: ChecklistItem[] | null = null;
+      const pendingStep = checklistDragPendingStepRef.current;
+      const startIndex = checklistDragStartIndexRef.current;
+      if (pendingStep !== 0 && startIndex !== null) {
+        const currentItems = checklistItemsRef.current;
+        const sourceIndex = currentItems.findIndex((entry) => entry.id === itemId);
+        if (sourceIndex !== -1) {
+          const targetIndex = Math.max(
+            0,
+            Math.min(currentItems.length - 1, startIndex + pendingStep),
+          );
+          if (sourceIndex !== targetIndex) {
+            const reorderedItems = [...currentItems];
+            const [movedItem] = reorderedItems.splice(sourceIndex, 1);
+            if (movedItem) {
+              reorderedItems.splice(targetIndex, 0, movedItem);
+              nextItemsAfterDrop = reorderedItems;
+            }
+          }
+        }
+      }
+
+      if (draggingChecklistResetTimeoutRef.current) {
+        clearTimeout(draggingChecklistResetTimeoutRef.current);
+      }
+      draggingChecklistResetTimeoutRef.current = setTimeout(() => {
+        draggingChecklistResetTimeoutRef.current = null;
+        if (draggingChecklistItemIdRef.current !== itemId) {
+          return;
+        }
+
+        if (nextItemsAfterDrop) {
+          checklistItemsRef.current = nextItemsAfterDrop;
+          setChecklistItems(nextItemsAfterDrop);
+          void persistChecklistItems(nextItemsAfterDrop);
+        }
+
+        draggingChecklistItemIdRef.current = null;
+        checklistDragStartIndexRef.current = null;
+        checklistDragPendingStepRef.current = 0;
+        checklistDragStartIndexValue.value = -1;
+        checklistDragStepValue.value = 0;
+        setDraggingChecklistItemId(null);
+      }, 140);
+    },
+    [checklistDragStartIndexValue, checklistDragStepValue, persistChecklistItems],
   );
 
   const commitChecklistEditing = useCallback(
@@ -1181,6 +1801,14 @@ export default function JobDetailScreen() {
   const closeJobMenu = useCallback(() => {
     setIsMenuOpen(false);
     setMenuAnchor(null);
+  }, []);
+
+  const openJobMenu = useCallback((event: GestureResponderEvent) => {
+    setMenuAnchor({
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+    });
+    setIsMenuOpen(true);
   }, []);
 
   const handleCompleteFromMenu = useCallback(async () => {
@@ -1285,13 +1913,17 @@ export default function JobDetailScreen() {
       <ProjectHeader
         title={job?.title?.trim() || "Job"}
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.back()}
+        onTitleActionPress={openJobMenu}
+        titleActionDisabled={!job}
       />
 
       <Animated.ScrollView
         className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 132, flexGrow: 1 }}
       >
         <Animated.View
@@ -1319,13 +1951,7 @@ export default function JobDetailScreen() {
               {job?.title?.trim() || "Bez naslova"}
             </Text>
             <TouchableOpacity
-              onPress={(event) => {
-                setMenuAnchor({
-                  x: event.nativeEvent.pageX,
-                  y: event.nativeEvent.pageY,
-                });
-                setIsMenuOpen(true);
-              }}
+              onPress={openJobMenu}
               disabled={!job}
               className="ml-1 h-9 w-9 items-center justify-center rounded-full"
               style={isMenuOpen ? { backgroundColor: titleMenuActiveBg } : undefined}
@@ -1354,7 +1980,7 @@ export default function JobDetailScreen() {
               />
               <Text
                 variant="labelSm"
-                className="ml-1 font-regular italic"
+                className="ml-1 font-regular"
                 style={{ color: secondaryTextColor, flexShrink: 1 }}
                 numberOfLines={1}
                 ellipsizeMode="tail"
@@ -1376,7 +2002,7 @@ export default function JobDetailScreen() {
               />
               <Text
                 variant="labelSm"
-                className="ml-1 font-regular italic"
+                className="ml-1 font-regular"
                 style={{ color: secondaryTextColor }}
                 numberOfLines={1}
                 ellipsizeMode="tail"
@@ -1398,7 +2024,7 @@ export default function JobDetailScreen() {
               />
               <Text
                 variant="labelSm"
-                className="ml-1 font-regular italic"
+                className="ml-1 font-regular"
                 style={{ color: secondaryTextColor }}
                 numberOfLines={1}
                 ellipsizeMode="tail"
@@ -1417,7 +2043,10 @@ export default function JobDetailScreen() {
 
         {job ? (
           <View className="mb-20">
-            <Animated.View className="mb-5" layout={metadataGroupLayout}>
+            <Animated.View
+              className="mb-5"
+              layout={draggingChecklistItemId !== null ? undefined : metadataGroupLayout}
+            >
                 {scheduledDateLabel ? (
                   <Animated.View
                     key="meta-when"
@@ -1576,10 +2205,11 @@ export default function JobDetailScreen() {
 
             {isChecklistVisible || checklistItems.length > 0 ? (
               <View className="mt-2">
-                {checklistItems.map((item) => {
+                {checklistItems.map((item, index) => {
                   const isChecklistItemCompleted = completedChecklistItemIds.includes(
                     item.id,
                   );
+                  const isDraggingChecklistItem = draggingChecklistItemId === item.id;
                   const separatorStyle = {
                     borderColor: metadataSeparatorColor,
                     borderBottomWidth: 0.5,
@@ -1673,54 +2303,105 @@ export default function JobDetailScreen() {
                   }
 
                   return (
-                    <View
+                    <SwipeableChecklistRow
                       key={item.id}
-                      className="mx-1 flex-row items-center rounded-xl px-4 py-2"
-                      style={separatorStyle}
+                      onDelete={() => removeChecklistItem(item.id, { focusNeighbor: false })}
+                      disabled={
+                        editingChecklistItemId !== null ||
+                        isChecklistComposerOpen ||
+                        draggingChecklistItemId !== null
+                      }
+                      iconBgColor={checklistDeleteIconBg}
+                      iconColor={checklistDeleteIconColor}
+                      dragIconColor={checklistDragHandleColor}
+                      dragDisabled={
+                        editingChecklistItemId !== null ||
+                        isChecklistComposerOpen ||
+                        (draggingChecklistItemId !== null &&
+                          draggingChecklistItemId !== item.id)
+                      }
+                      rowIndex={index}
+                      dragStartIndexValue={checklistDragStartIndexValue}
+                      dragStepValue={checklistDragStepValue}
+                      isDragActive={draggingChecklistItemId === item.id}
+                      dragSlotHeight={checklistDragRowHeight}
+                      dragPlaceholderColor={checklistDragPlaceholderBg}
+                      dragPlaceholderBorderColor={checklistDragPlaceholderBorderColor}
+                      onDragStart={() => handleChecklistDragStart(item.id)}
+                      onDragStep={(step) => handleChecklistDragStep(item.id, step)}
+                      onDragEnd={() => handleChecklistDragEnd(item.id)}
                     >
-                      <TouchableOpacity
-                        activeOpacity={0.75}
-                        className="h-5 w-5 items-center justify-center"
-                        onPress={() => handleChecklistCompleteToggle(item.id)}
+                      <View
+                        className="mx-1 flex-row items-center rounded-xl pl-4 pr-11 py-2"
+                        onLayout={(event) => {
+                          if (draggingChecklistItemId !== null) {
+                            return;
+                          }
+                          const measuredHeight = Math.max(
+                            1,
+                            Math.round(event.nativeEvent.layout.height),
+                          );
+                          if (Math.abs(measuredHeight - checklistDragRowHeight) > 1) {
+                            setChecklistDragRowHeight(measuredHeight);
+                          }
+                        }}
+                        style={[
+                          !isDraggingChecklistItem ? separatorStyle : null,
+                          isDraggingChecklistItem
+                            ? {
+                                opacity: 1,
+                                backgroundColor: checklistDragActiveBg,
+                                borderWidth: 1,
+                                borderColor: checklistDragActiveBorderColor,
+                                ...checklistDragActiveShadow,
+                              }
+                            : null,
+                        ]}
                       >
-                        {isChecklistItemCompleted ? (
-                          <Icon
-                            name="check"
-                            size={11}
-                            color={checklistCheckColor}
-                            weight="bold"
-                          />
-                        ) : (
-                          <View
-                            className="h-[12px] w-[12px] rounded-full"
-                            style={{
-                              borderWidth: 1,
-                              borderColor: checklistDotColor,
-                              backgroundColor: "transparent",
-                            }}
-                          />
-                        )}
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        className="ml-2 flex-1 py-1"
-                        onPress={() => handleChecklistRowPress(item)}
-                      >
-                        <Text
-                          variant="labelSm"
-                          className="flex-1"
-                          style={{
-                            color: isChecklistItemCompleted
-                              ? checklistCompletedTextColor
-                              : primaryTextColor,
-                          }}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
+                        <TouchableOpacity
+                          activeOpacity={0.75}
+                          className="h-5 w-5 items-center justify-center"
+                          onPress={() => handleChecklistCompleteToggle(item.id)}
                         >
-                          {item.text}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                          {isChecklistItemCompleted ? (
+                            <Icon
+                              name="check"
+                              size={11}
+                              color={checklistCheckColor}
+                              weight="bold"
+                            />
+                          ) : (
+                            <View
+                              className="h-[12px] w-[12px] rounded-full"
+                              style={{
+                                borderWidth: 1,
+                                borderColor: checklistDotColor,
+                                backgroundColor: "transparent",
+                              }}
+                            />
+                          )}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          activeOpacity={0.8}
+                          className="ml-2 flex-1 py-1"
+                          onPress={() => handleChecklistRowPress(item)}
+                        >
+                          <Text
+                            variant="labelSm"
+                            className="flex-1"
+                            style={{
+                              color: isChecklistItemCompleted
+                                ? checklistCompletedTextColor
+                                : primaryTextColor,
+                            }}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {item.text}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </SwipeableChecklistRow>
                   );
                 })}
 
@@ -1822,9 +2503,9 @@ export default function JobDetailScreen() {
               />
             </View>
 
-            {(job.payments?.length ?? 0) > 0 ? (
+            {payments.length > 0 ? (
               <View className="mt-2 rounded-xl">
-                {job.payments.map((payment) => {
+                {visiblePayments.map((payment) => {
                   const paymentAmountLabel = formatPriceLabel(payment.amount) ?? "0 RSD";
                   const paymentDateLabel = formatPaymentDateLabel(payment.payment_date);
                   const paymentTitleLabel = payment.note?.trim() || "Payment";
@@ -1836,7 +2517,7 @@ export default function JobDetailScreen() {
                     >
                       <View className="flex-row items-center">
                         <View
-                          className="mr-3 items-center justify-center"
+                          className="w-8 items-center justify-center"
                           style={{
                             width: SIZE_TOKENS.quickTaskCheckbox,
                             height: SIZE_TOKENS.quickTaskCheckbox,
@@ -1850,31 +2531,62 @@ export default function JobDetailScreen() {
                         </View>
                         <Text
                           variant="labelSm"
-                          className="mr-3 font-medium"
+                          className="w-[52px] font-medium text-center"
                           style={{ color: paymentAccentColor, fontSize: 11, lineHeight: 14 }}
+                          numberOfLines={1}
                         >
                           {paymentDateLabel}
                         </Text>
-                        <Text
-                          variant="labelSm"
-                          className="flex-1 font-regular"
-                          style={{ color: primaryTextColor }}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {paymentTitleLabel}
-                        </Text>
-                        <Text
-                          variant="label"
-                          className="ml-3 font-semibold"
-                          style={{ color: primaryTextColor }}
-                        >
-                          {paymentAmountLabel}
-                        </Text>
+                        <View className="min-w-0 flex-1 justify-center">
+                          <Text
+                            variant="labelSm"
+                            className="font-regular"
+                            style={{ color: primaryTextColor }}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {paymentTitleLabel}
+                          </Text>
+                        </View>
+                        <View className="w-[92px] items-end justify-center">
+                          <Text
+                            variant="label"
+                            className="font-semibold"
+                            style={{ color: primaryTextColor }}
+                            numberOfLines={1}
+                          >
+                            {paymentAmountLabel}
+                          </Text>
+                        </View>
                       </View>
                     </View>
                   );
                 })}
+                {hiddenPaymentsCount > 0 ? (
+                  <TouchableOpacity
+                    onPress={() => setIsPaymentsExpanded((current) => !current)}
+                    onPressIn={() => setIsPaymentsTogglePressed(true)}
+                    onPressOut={() => setIsPaymentsTogglePressed(false)}
+                    activeOpacity={0.88}
+                    className="mt-2 self-start rounded-full py-1.5"
+                    style={{
+                      backgroundColor: isPaymentsTogglePressed
+                        ? paymentsToggleBgPressed
+                        : "transparent",
+                      marginLeft: -6,
+                      paddingHorizontal: 10,
+                    }}
+                  >
+                    <Text
+                      className="font-medium"
+                      style={{ color: secondaryTextColor, fontSize: 11, lineHeight: 14 }}
+                    >
+                      {isPaymentsExpanded
+                        ? "Show less"
+                        : `Show ${hiddenPaymentsCount} more`}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             ) : (
               <View
@@ -1917,6 +2629,40 @@ export default function JobDetailScreen() {
               </Text>
             </View>
 
+            <View className="mt-6">
+              <View className="flex-row items-center justify-between">
+                <Text
+                  className="font-bold"
+                  style={{ color: subheaderColor, fontSize: 15 }}
+                >
+                  {"Reminders"}
+                </Text>
+                <TouchableOpacity
+                  activeOpacity={0.76}
+                  className="h-7 w-7 items-center justify-center rounded-full"
+                  onPress={openRemindersModal}
+                >
+                  <Icon name="plusfab" size={18} color={subheaderColor} />
+                </TouchableOpacity>
+              </View>
+              <View
+                className="mt-2 h-px"
+                style={{ backgroundColor: metadataSeparatorColor }}
+              />
+            </View>
+
+            <View
+              className="mt-2 mx-1 min-h-[88px] items-center justify-center rounded-xl px-5 py-6"
+            >
+              <Text
+                variant="labelSm"
+                className="text-center italic"
+                style={emptySectionEmbossTextStyle}
+              >
+                No reminders yet
+              </Text>
+            </View>
+
           </View>
         ) : (
           <View className="flex-1 items-center justify-center">
@@ -1924,6 +2670,243 @@ export default function JobDetailScreen() {
           </View>
         )}
       </Animated.ScrollView>
+
+      <Modal
+        visible={isRemindersModalOpen}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeRemindersModal}
+      >
+        <View style={StyleSheet.absoluteFill}>
+          <TransparentModalShell
+            closeOnBackdropPress
+            onBackdropPress={closeRemindersModal}
+            enteringBackdrop={FadeIn.duration(120)}
+            exitingBackdrop={FadeOut.duration(120)}
+            enteringContent={FadeIn.duration(170)}
+            exitingContent={FadeOut.duration(120)}
+            contentStyle={[
+              {
+                width: "85%",
+                height: "70%",
+                borderWidth: 0.5,
+                borderRadius: 28,
+                overflow: "hidden",
+                borderColor: statusModalBorderColor,
+                backgroundColor: statusModalBg,
+              },
+              statusModalWindowShadow,
+            ]}
+            overlayStyle={{
+              paddingHorizontal: 16,
+              paddingVertical: 24,
+            }}
+            backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
+            backdropOpacity={isDark ? 0.64 : 0.4}
+          >
+            <View
+              style={{
+                height: 56,
+                alignItems: "center",
+                justifyContent: "space-between",
+                flexDirection: "row",
+                marginTop: 6,
+                marginBottom: 4,
+                paddingHorizontal: 16,
+              }}
+            >
+              <View style={{ width: 36, height: 36 }} />
+              <Text
+                className="font-bold text-things-modal-title"
+                style={{ color: primaryTextColor, textAlign: "center", flex: 1 }}
+              >
+                Reminders
+              </Text>
+              <ModalCircleButton
+                icon="close"
+                theme={theme}
+                onPress={closeRemindersModal}
+              />
+            </View>
+
+            <View
+              style={{
+                height: 0.5,
+                backgroundColor: statusModalDividerColor,
+                marginHorizontal: 16,
+              }}
+            />
+
+            <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 }}>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <View
+                  style={{
+                    borderRadius: 9999,
+                    borderWidth: 1,
+                    flex: 1,
+                    minHeight: 40,
+                    overflow: "hidden",
+                    position: "relative",
+                    borderColor: actionButtonBorder,
+                  }}
+                >
+                  <BlurView
+                    intensity={48}
+                    tint="default"
+                    experimentalBlurMethod={blurMethod}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  <View
+                    style={[
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: actionButtonHighlight },
+                    ]}
+                    pointerEvents="none"
+                  />
+                  <Pressable
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 9999,
+                      flex: 1,
+                      justifyContent: "center",
+                      minHeight: 40,
+                      paddingHorizontal: 14,
+                    }}
+                    android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
+                    onPress={() => {
+                      closeRemindersModal();
+                      handleSelectToday();
+                    }}
+                  >
+                    <Text
+                      className="font-semibold text-label-sm"
+                      style={{ color: actionButtonText }}
+                      numberOfLines={1}
+                    >
+                      Today
+                    </Text>
+                  </Pressable>
+                </View>
+
+                <View
+                  style={{
+                    borderRadius: 9999,
+                    borderWidth: 1,
+                    flex: 1,
+                    minHeight: 40,
+                    overflow: "hidden",
+                    position: "relative",
+                    borderColor: actionButtonBorder,
+                  }}
+                >
+                  <BlurView
+                    intensity={48}
+                    tint="default"
+                    experimentalBlurMethod={blurMethod}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  <View
+                    style={[
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: actionButtonHighlight },
+                    ]}
+                    pointerEvents="none"
+                  />
+                  <Pressable
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 9999,
+                      flex: 1,
+                      justifyContent: "center",
+                      minHeight: 40,
+                      paddingHorizontal: 14,
+                    }}
+                    android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
+                    onPress={() => {
+                      closeRemindersModal();
+                      requestAnimationFrame(() => {
+                        openWhenModal();
+                      });
+                    }}
+                  >
+                    <Text
+                      className="font-semibold text-label-sm"
+                      style={{ color: actionButtonText }}
+                      numberOfLines={1}
+                    >
+                      Pick date
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              <View style={{ marginTop: 10 }}>
+                <View
+                  style={{
+                    borderRadius: 9999,
+                    borderWidth: 1,
+                    minHeight: 40,
+                    overflow: "hidden",
+                    position: "relative",
+                    borderColor: actionButtonBorder,
+                  }}
+                >
+                  <BlurView
+                    intensity={48}
+                    tint="default"
+                    experimentalBlurMethod={blurMethod}
+                    style={StyleSheet.absoluteFill}
+                    pointerEvents="none"
+                  />
+                  <View
+                    style={[
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: actionButtonHighlight },
+                    ]}
+                    pointerEvents="none"
+                  />
+                  <Pressable
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 9999,
+                      justifyContent: "center",
+                      minHeight: 40,
+                      paddingHorizontal: 14,
+                    }}
+                    android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
+                    onPress={() => {
+                      closeRemindersModal();
+                      handleSelectSomeday();
+                    }}
+                  >
+                    <Text
+                      className="font-semibold text-label-sm"
+                      style={{ color: actionButtonText }}
+                      numberOfLines={1}
+                    >
+                      Someday
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              <View className="mt-4 mx-1 min-h-[88px] items-center justify-center rounded-xl px-5 py-6">
+                <Text
+                  variant="labelSm"
+                  className="text-center italic"
+                  style={emptySectionEmbossTextStyle}
+                >
+                  No reminders yet
+                </Text>
+              </View>
+            </View>
+          </TransparentModalShell>
+        </View>
+      </Modal>
 
       <WhenCalendarModal
         visible={isWhenModalOpen}

@@ -9,6 +9,7 @@ import {
   updateInboxTodo,
 } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
@@ -198,6 +199,7 @@ export default function UpcomingScreen() {
   const [fadingIds, setFadingIds] = useState<Set<string>>(new Set());
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
   const emptyIconColor = withOpacity(
     COLOR_TOKENS[colorMode]["text.secondary"],
     0.5,
@@ -630,6 +632,7 @@ export default function UpcomingScreen() {
       <ProjectHeader
         title="Upcoming"
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.back()}
       />
 
@@ -639,6 +642,7 @@ export default function UpcomingScreen() {
           scrollY.value = event.nativeEvent.contentOffset.y;
         }}
         scrollEventThrottle={16}
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{
           paddingTop: 94,
           paddingBottom: 36,

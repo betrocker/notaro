@@ -30,7 +30,6 @@ import {
   Pressable,
   Platform,
   ScrollView,
-  StyleSheet,
   View,
 } from "react-native";
 
@@ -576,19 +575,34 @@ export default function ClientsScreen() {
   };
 
   return (
-    <View style={styles.safeArea}>
+    <View className="flex-1 bg-transparent">
       <TransparentModalShell
         contentStyle={[
-          styles.modalWindow,
-          styles.modalWindowShadow,
+          {
+            borderRadius: 28,
+            borderWidth: 0.5,
+            height: "70%",
+            overflow: "hidden",
+            width: "85%",
+          },
+          Platform.select({
+            ios: {
+              ...SHADOW_TOKENS.card.ios,
+            },
+            android: {
+              elevation: SHADOW_TOKENS.card.android.elevation,
+            },
+          }),
           { backgroundColor: modalBg, borderColor },
         ]}
-        overlayStyle={styles.overlay}
+        overlayStyle={{ paddingHorizontal: 16, paddingVertical: 24 }}
       >
         <ScrollView
-          style={styles.list}
           className="flex-1"
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={{
+            paddingBottom: FOOTER_ACTIONS_HEIGHT + 12,
+            paddingTop: HEADER_GLASS_HEIGHT + 6,
+          }}
           scrollIndicatorInsets={{ top: HEADER_GLASS_HEIGHT, bottom: FOOTER_ACTIONS_HEIGHT }}
           showsVerticalScrollIndicator={false}
         >
@@ -604,7 +618,7 @@ export default function ClientsScreen() {
           {clients.map((client, index) => (
             <Pressable
               key={client.id}
-              style={styles.clientRow}
+              className="min-h-[44px] flex-row items-center px-[18px] py-2"
               onPress={() =>
                 setSelectedClientId((current) =>
                   current === client.id ? null : client.id,
@@ -613,7 +627,13 @@ export default function ClientsScreen() {
             >
               <View
                 style={[
-                  styles.clientIconWrap,
+                  {
+                    alignItems: "center",
+                    borderRadius: 11,
+                    height: 22,
+                    justifyContent: "center",
+                    width: 22,
+                  },
                   { backgroundColor: rowIconBg },
                 ]}
               >
@@ -626,12 +646,8 @@ export default function ClientsScreen() {
               </View>
               <Text
                 variant="labelSm"
-                className="font-medium"
-                style={[
-                  styles.clientLabel,
-                  styles.clientLabelText,
-                  { color: COLOR_TOKENS[colorMode]["text.primary"] },
-                ]}
+                className="ml-[10px] flex-1 font-medium"
+                style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
               >
                 {client.name}
               </Text>
@@ -656,21 +672,34 @@ export default function ClientsScreen() {
           ) : null}
         </ScrollView>
 
-        <View style={[styles.header, { backgroundColor: modalBg }]}>
-          <View style={styles.headerSpacer} />
+        <View
+          style={{
+            alignItems: "center",
+            flexDirection: "row",
+            height: HEADER_GLASS_HEIGHT,
+            left: 0,
+            position: "absolute",
+            right: 0,
+            top: 0,
+            zIndex: 6,
+            paddingBottom: 8,
+            paddingLeft: 16,
+            paddingRight: 12,
+            paddingTop: 10,
+            backgroundColor: modalBg,
+          }}
+        >
+          <View className="w-9" />
           <Text
-            className="font-bold text-things-modal-title"
-            style={[
-              styles.headerTitle,
-              { color: COLOR_TOKENS[colorMode]["text.primary"] },
-            ]}
+            className="flex-1 text-center font-bold text-things-modal-title"
+            style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
           >
             Clients
           </Text>
           {selectedClientId || isJobAssignmentMode || Boolean(pickerToken) ? (
             <Pressable
+              className="h-9 w-9 items-center justify-center rounded-[18px] border"
               style={[
-                styles.headerConfirmButton,
                 {
                   backgroundColor: confirmButtonBg,
                   borderColor: confirmButtonBorder,
@@ -690,21 +719,38 @@ export default function ClientsScreen() {
           )}
         </View>
 
-        <View style={styles.actionsRow}>
-          <View style={[styles.actionButtonShell, { borderColor: actionButtonBorder }]}>
+        <View
+          style={{
+            bottom: 0,
+            flexDirection: "row",
+            gap: 10,
+            left: 0,
+            position: "absolute",
+            paddingBottom: 8,
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            right: 0,
+            zIndex: 5,
+          }}
+        >
+          <View
+            className="relative min-h-10 flex-1 overflow-hidden rounded-full border"
+            style={{ borderColor: actionButtonBorder }}
+          >
             <BlurView
               intensity={48}
               tint="default"
               experimentalBlurMethod={blurMethod}
-              style={StyleSheet.absoluteFill}
+              className="absolute inset-0"
               pointerEvents="none"
             />
             <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: actionButtonHighlight }]}
+              className="absolute inset-0"
+              style={{ backgroundColor: actionButtonHighlight }}
               pointerEvents="none"
             />
             <Pressable
-              style={styles.actionButton}
+              className="min-h-10 flex-1 items-center justify-center rounded-full px-[14px]"
               android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
               onPress={openManageClientsScreen}
             >
@@ -718,20 +764,24 @@ export default function ClientsScreen() {
             </Pressable>
           </View>
 
-          <View style={[styles.actionButtonShell, { borderColor: actionButtonBorder }]}>
+          <View
+            className="relative min-h-10 flex-1 overflow-hidden rounded-full border"
+            style={{ borderColor: actionButtonBorder }}
+          >
             <BlurView
               intensity={48}
               tint="default"
               experimentalBlurMethod={blurMethod}
-              style={StyleSheet.absoluteFill}
+              className="absolute inset-0"
               pointerEvents="none"
             />
             <View
-              style={[StyleSheet.absoluteFill, { backgroundColor: actionButtonHighlight }]}
+              className="absolute inset-0"
+              style={{ backgroundColor: actionButtonHighlight }}
               pointerEvents="none"
             />
             <Pressable
-              style={styles.actionButton}
+              className="min-h-10 flex-1 items-center justify-center rounded-full px-[14px]"
               android_ripple={{ color: withOpacity(actionButtonText, 0.08) }}
               onPress={openAddClientScreen}
             >
@@ -749,7 +799,16 @@ export default function ClientsScreen() {
         {isManageClientsScreenOpen ? (
           <Animated.View
             style={[
-              styles.manageClientsScreen,
+              {
+                position: "absolute",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                borderRadius: 28,
+                borderWidth: 0.5,
+                zIndex: 21,
+              },
               {
                 backgroundColor: modalBg,
                 borderColor,
@@ -761,20 +820,33 @@ export default function ClientsScreen() {
               setManageClientsScreenHeight(event.nativeEvent.layout.height)
             }
           >
-            <View style={[styles.addClientHeader, { backgroundColor: modalBg }]}>
-              <View style={styles.headerSpacer} />
+            <View
+              style={{
+                alignItems: "center",
+                flexDirection: "row",
+                height: HEADER_GLASS_HEIGHT,
+                left: 0,
+                paddingBottom: 8,
+                paddingLeft: 16,
+                paddingRight: 12,
+                paddingTop: 10,
+                position: "absolute",
+                right: 0,
+                top: 0,
+                zIndex: 2,
+                backgroundColor: modalBg,
+              }}
+            >
+              <View className="w-9" />
               <Text
-                className="font-bold text-things-modal-title"
-                style={[
-                  styles.headerTitle,
-                  { color: COLOR_TOKENS[colorMode]["text.primary"] },
-                ]}
+                className="flex-1 text-center font-bold text-things-modal-title"
+                style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
               >
                 Manage Clients
               </Text>
               <Pressable
+                className="h-9 w-9 items-center justify-center rounded-[18px] border"
                 style={[
-                  styles.headerConfirmButton,
                   {
                     backgroundColor: confirmButtonBg,
                     borderColor: confirmButtonBorder,
@@ -787,16 +859,30 @@ export default function ClientsScreen() {
             </View>
 
             <ScrollView
-              style={styles.addClientFormScroll}
-              contentContainerStyle={styles.manageListContent}
+              className="flex-1"
+              contentContainerStyle={{
+                gap: 4,
+                paddingHorizontal: 16,
+                paddingTop: HEADER_GLASS_HEIGHT + 10,
+                paddingBottom: 20,
+              }}
               showsVerticalScrollIndicator={false}
             >
               {clients.map((client) => (
-                <View key={`manage-${client.id}`} style={styles.manageClientRow}>
+                <View
+                  key={`manage-${client.id}`}
+                  className="min-h-[44px] flex-row items-center px-0.5 py-1"
+                >
                   <Pressable
                     style={[
-                      styles.manageIconButton,
-                      isDeletingClientId === client.id ? styles.disabledIconButton : null,
+                      {
+                        alignItems: "center",
+                        borderRadius: 12,
+                        height: 28,
+                        justifyContent: "center",
+                        width: 28,
+                      },
+                      isDeletingClientId === client.id ? { opacity: 0.4 } : null,
                     ]}
                     onPress={() => void handleDeleteClient(client.id)}
                     disabled={isDeletingClientId === client.id}
@@ -811,17 +897,20 @@ export default function ClientsScreen() {
 
                   <Text
                     variant="labelSm"
-                    className="font-medium"
-                    style={[
-                      styles.manageClientLabel,
-                      { color: COLOR_TOKENS[colorMode]["text.primary"] },
-                    ]}
+                    className="mx-[10px] flex-1 font-medium"
+                    style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
                   >
                     {client.name}
                   </Text>
 
                   <Pressable
-                    style={styles.manageIconButton}
+                    style={{
+                      alignItems: "center",
+                      borderRadius: 12,
+                      height: 28,
+                      justifyContent: "center",
+                      width: 28,
+                    }}
                     onPress={() => openEditClientScreen(client)}
                   >
                     <Icon
@@ -849,7 +938,16 @@ export default function ClientsScreen() {
         {isEditClientScreenOpen ? (
           <Animated.View
             style={[
-              styles.editClientScreen,
+              {
+                position: "absolute",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                borderRadius: 28,
+                borderWidth: 0.5,
+                zIndex: 22,
+              },
               {
                 backgroundColor: modalBg,
                 borderColor,
@@ -861,24 +959,37 @@ export default function ClientsScreen() {
               setEditClientScreenHeight(event.nativeEvent.layout.height)
             }
           >
-            <View style={[styles.addClientHeader, { backgroundColor: modalBg }]}>
+            <View
+              style={{
+                alignItems: "center",
+                flexDirection: "row",
+                height: HEADER_GLASS_HEIGHT,
+                left: 0,
+                paddingBottom: 8,
+                paddingLeft: 16,
+                paddingRight: 12,
+                paddingTop: 10,
+                position: "absolute",
+                right: 0,
+                top: 0,
+                zIndex: 2,
+                backgroundColor: modalBg,
+              }}
+            >
               <ModalCircleButton
                 icon="close"
                 theme={theme}
                 onPress={() => closeEditClientScreen(true)}
               />
               <Text
-                className="font-bold text-things-modal-title"
-                style={[
-                  styles.headerTitle,
-                  { color: COLOR_TOKENS[colorMode]["text.primary"] },
-                ]}
+                className="flex-1 text-center font-bold text-things-modal-title"
+                style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
               >
                 Edit Client
               </Text>
               <Pressable
+                className="h-9 w-9 items-center justify-center rounded-[18px] border"
                 style={[
-                  styles.headerConfirmButton,
                   {
                     backgroundColor: confirmButtonBg,
                     borderColor: confirmButtonBorder,
@@ -892,12 +1003,18 @@ export default function ClientsScreen() {
             </View>
 
             <ScrollView
-              style={styles.addClientFormScroll}
-              contentContainerStyle={styles.addClientFormContent}
+              className="flex-1"
+              contentContainerStyle={{
+                gap: 10,
+                backgroundColor: "transparent",
+                paddingHorizontal: 16,
+                paddingTop: HEADER_GLASS_HEIGHT + 10,
+                paddingBottom: 20,
+              }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -906,7 +1023,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -932,12 +1053,12 @@ export default function ClientsScreen() {
                     returnKeyType="next"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -946,7 +1067,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -976,12 +1101,12 @@ export default function ClientsScreen() {
                     returnKeyType="next"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -990,7 +1115,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -1017,7 +1146,7 @@ export default function ClientsScreen() {
                     returnKeyType="done"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
@@ -1037,7 +1166,16 @@ export default function ClientsScreen() {
         {isAddClientScreenOpen ? (
           <Animated.View
             style={[
-              styles.addClientScreen,
+              {
+                position: "absolute",
+                top: 0,
+                right: 0,
+                bottom: 0,
+                left: 0,
+                borderRadius: 28,
+                borderWidth: 0.5,
+                zIndex: 20,
+              },
               {
                 backgroundColor: modalBg,
                 borderColor,
@@ -1049,24 +1187,37 @@ export default function ClientsScreen() {
               setAddClientScreenHeight(event.nativeEvent.layout.height)
             }
           >
-            <View style={[styles.addClientHeader, { backgroundColor: modalBg }]}>
+            <View
+              style={{
+                alignItems: "center",
+                flexDirection: "row",
+                height: HEADER_GLASS_HEIGHT,
+                left: 0,
+                paddingBottom: 8,
+                paddingLeft: 16,
+                paddingRight: 12,
+                paddingTop: 10,
+                position: "absolute",
+                right: 0,
+                top: 0,
+                zIndex: 2,
+                backgroundColor: modalBg,
+              }}
+            >
               <ModalCircleButton
                 icon="close"
                 theme={theme}
                 onPress={() => closeAddClientScreen()}
               />
               <Text
-                className="font-bold text-things-modal-title"
-                style={[
-                  styles.headerTitle,
-                  { color: COLOR_TOKENS[colorMode]["text.primary"] },
-                ]}
+                className="flex-1 text-center font-bold text-things-modal-title"
+                style={{ color: COLOR_TOKENS[colorMode]["text.primary"] }}
               >
                 Add Client
               </Text>
               <Pressable
+                className="h-9 w-9 items-center justify-center rounded-[18px] border"
                 style={[
-                  styles.headerConfirmButton,
                   {
                     backgroundColor: confirmButtonBg,
                     borderColor: confirmButtonBorder,
@@ -1080,12 +1231,18 @@ export default function ClientsScreen() {
             </View>
 
             <ScrollView
-              style={styles.addClientFormScroll}
-              contentContainerStyle={styles.addClientFormContent}
+              className="flex-1"
+              contentContainerStyle={{
+                gap: 10,
+                backgroundColor: "transparent",
+                paddingHorizontal: 16,
+                paddingTop: HEADER_GLASS_HEIGHT + 10,
+                paddingBottom: 20,
+              }}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -1094,7 +1251,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -1120,12 +1281,12 @@ export default function ClientsScreen() {
                     returnKeyType="next"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -1134,7 +1295,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -1164,12 +1329,12 @@ export default function ClientsScreen() {
                     returnKeyType="next"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
 
-              <View style={styles.inputGroup}>
+              <View>
                 <Text
                   className="mb-2 ml-1 font-semibold text-label-md"
                   style={{ color: inputLabelColor }}
@@ -1178,7 +1343,11 @@ export default function ClientsScreen() {
                 </Text>
                 <View
                   style={[
-                    styles.inputShell,
+                    {
+                      justifyContent: "center",
+                      paddingHorizontal: 12,
+                      paddingVertical: 0,
+                    },
                     {
                       height: fieldHeight,
                       borderRadius: controlRadius,
@@ -1205,7 +1374,7 @@ export default function ClientsScreen() {
                     returnKeyType="done"
                     variant="bodyMd"
                     selectionColor={selectionColor}
-                    style={[styles.inputField, { color: inputText }]}
+                    style={{ lineHeight: 20, paddingHorizontal: 0, paddingVertical: 0, color: inputText }}
                   />
                 </View>
               </View>
@@ -1225,197 +1394,3 @@ export default function ClientsScreen() {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  addClientFormContent: {
-    gap: 10,
-    backgroundColor: "transparent",
-    paddingHorizontal: 16,
-    paddingTop: HEADER_GLASS_HEIGHT + 10,
-    paddingBottom: 20,
-  },
-  addClientFormScroll: {
-    flex: 1,
-  },
-  addClientHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    height: HEADER_GLASS_HEIGHT,
-    left: 0,
-    paddingBottom: 8,
-    paddingLeft: 16,
-    paddingRight: 12,
-    paddingTop: 10,
-    position: "absolute",
-    right: 0,
-    top: 0,
-    zIndex: 2,
-  },
-  addClientScreen: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 28,
-    borderWidth: 0.5,
-    zIndex: 20,
-  },
-  disabledIconButton: {
-    opacity: 0.4,
-  },
-  editClientScreen: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 28,
-    borderWidth: 0.5,
-    zIndex: 22,
-  },
-  actionButton: {
-    alignItems: "center",
-    borderRadius: 9999,
-    flex: 1,
-    justifyContent: "center",
-    minHeight: 40,
-    paddingHorizontal: 14,
-  },
-  actionButtonShell: {
-    borderRadius: 9999,
-    borderWidth: 1,
-    flex: 1,
-    minHeight: 40,
-    overflow: "hidden",
-    position: "relative",
-  },
-  actionsRow: {
-    bottom: 0,
-    flexDirection: "row",
-    gap: 10,
-    left: 0,
-    position: "absolute",
-    paddingBottom: 8,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    right: 0,
-    zIndex: 5,
-  },
-  clientRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    minHeight: 44,
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-  },
-  clientIconWrap: {
-    alignItems: "center",
-    borderRadius: 11,
-    height: 22,
-    justifyContent: "center",
-    width: 22,
-  },
-  clientLabel: {
-    marginLeft: 10,
-  },
-  clientLabelText: {
-    flex: 1,
-  },
-  header: {
-    alignItems: "center",
-    flexDirection: "row",
-    height: HEADER_GLASS_HEIGHT,
-    left: 0,
-    position: "absolute",
-    right: 0,
-    top: 0,
-    zIndex: 6,
-    paddingBottom: 8,
-    paddingLeft: 16,
-    paddingRight: 12,
-    paddingTop: 10,
-  },
-  headerConfirmButton: {
-    alignItems: "center",
-    borderRadius: 18,
-    borderWidth: 1,
-    height: 36,
-    justifyContent: "center",
-    width: 36,
-  },
-  headerSpacer: {
-    width: 36,
-  },
-  headerTitle: {
-    flex: 1,
-    textAlign: "center",
-  },
-  inputField: {
-    lineHeight: 20,
-    paddingHorizontal: 0,
-    paddingVertical: 0,
-  },
-  inputGroup: {
-    gap: 0,
-  },
-  inputShell: {
-    justifyContent: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 0,
-  },
-  listContent: {
-    paddingBottom: FOOTER_ACTIONS_HEIGHT + 12,
-    paddingTop: HEADER_GLASS_HEIGHT + 6,
-  },
-  list: {
-    flex: 1,
-  },
-  manageClientLabel: {
-    flex: 1,
-    marginHorizontal: 10,
-  },
-  manageClientRow: {
-    alignItems: "center",
-    flexDirection: "row",
-    minHeight: 44,
-    paddingHorizontal: 2,
-    paddingVertical: 4,
-  },
-  manageClientsScreen: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 28,
-    borderWidth: 0.5,
-    zIndex: 21,
-  },
-  manageIconButton: {
-    alignItems: "center",
-    borderRadius: 12,
-    height: 28,
-    justifyContent: "center",
-    width: 28,
-  },
-  manageListContent: {
-    gap: 4,
-    paddingHorizontal: 16,
-    paddingTop: HEADER_GLASS_HEIGHT + 10,
-    paddingBottom: 20,
-  },
-  modalWindow: {
-    borderRadius: 28,
-    borderWidth: 0.5,
-    height: "70%",
-    overflow: "hidden",
-    width: "85%",
-  },
-  modalWindowShadow: {
-    ...Platform.select({
-      ios: {
-        ...SHADOW_TOKENS.card.ios,
-      },
-      android: {
-        elevation: SHADOW_TOKENS.card.android.elevation,
-      },
-    }),
-  },
-  overlay: {
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-  },
-  safeArea: {
-    backgroundColor: "transparent",
-    flex: 1,
-  },
-});

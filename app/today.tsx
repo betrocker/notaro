@@ -9,6 +9,7 @@ import {
   updateInboxTodo,
 } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { useFocusEffect } from "@react-navigation/native";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
@@ -67,6 +68,7 @@ export default function TodayScreen() {
   const [fadingIds, setFadingIds] = useState<Set<string>>(new Set());
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const checkboxBorderColor = withOpacity(
     COLOR_TOKENS[colorMode]["text.secondary"],
@@ -316,6 +318,7 @@ export default function TodayScreen() {
       <ProjectHeader
         title="Today"
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.back()}
       />
 
@@ -324,6 +327,7 @@ export default function TodayScreen() {
         onScroll={scrollHandler}
         scrollEventThrottle={16}
         keyboardShouldPersistTaps="handled"
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 32, flexGrow: 1 }}
       >
         <Pressable className="flex-1" onPress={() => setExpandedTaskId(null)}>

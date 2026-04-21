@@ -37,6 +37,22 @@ const ICON_MAP = {
     ios: "archivebox.fill",
     android: "archive",
   },
+  archiveOutline: {
+    ios: "archivebox",
+    android: "archive-outline",
+  },
+  archiveFilled: {
+    ios: "archivebox.fill",
+    android: "archive",
+  },
+  boxOutline: {
+    ios: "shippingbox",
+    android: "package-variant-closed",
+  },
+  boxFilled: {
+    ios: "shippingbox.fill",
+    android: "package-variant",
+  },
   logbook: {
     ios: "book.closed.fill",
     android: "book",
@@ -160,6 +176,10 @@ const ICON_MAP = {
   checklist: {
     ios: "checklist",
     android: "format-list-checks",
+  },
+  dragHandle: {
+    ios: "line.3.horizontal",
+    android: "drag-horizontal-variant",
   },
   flag: {
     ios: "flag.fill",

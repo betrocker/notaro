@@ -24,6 +24,8 @@ import { Icon, IconName } from "./Icon";
 
 const SPRING_CONFIG = { damping: 56, stiffness: 620, mass: 0.7 };
 const BUTTON_OFFSCREEN = 150;
+const FAB_SIZE = 64;
+const FAB_HORIZONTAL_MARGIN = 24;
 
 export type MagicMenuAction = {
   key: string;
@@ -64,6 +66,7 @@ export default function MagicMenu({
 }: ThingsMagicMenuProps) {
   const hasDirectPrimaryAction = typeof onPrimaryActionPress === "function";
   const [isOpen, setIsOpen] = useState(false);
+  const [menuHeight, setMenuHeight] = useState(0);
   const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
   const isDark = colorScheme === "dark";
@@ -86,6 +89,9 @@ export default function MagicMenu({
   const menuProgress = useSharedValue(0);
   const buttonScale = useSharedValue(1);
   const buttonTranslateY = useSharedValue(0);
+  const menuStartTranslateX = Math.max(width / 2 - FAB_HORIZONTAL_MARGIN - FAB_SIZE / 2, 0);
+  const menuStartTranslateY = Math.max(menuHeight / 2 - FAB_SIZE / 2, 0);
+  const menuLeft = Math.max((width - menuWidth) / 2, 0);
 
   const openMenu = () => {
     setIsOpen(true);
@@ -110,12 +116,12 @@ export default function MagicMenu({
   };
 
   const menuAnimatedStyle = useAnimatedStyle(() => {
-    const scale = interpolate(menuProgress.value, [0, 1], [0.18, 1]);
-    const translateY = interpolate(menuProgress.value, [0, 1], [22, 0]);
-    const translateX = interpolate(menuProgress.value, [0, 1], [18, 0]);
+    const scale = interpolate(menuProgress.value, [0, 1], [0.08, 1]);
+    const translateY = interpolate(menuProgress.value, [0, 1], [menuStartTranslateY, 0]);
+    const translateX = interpolate(menuProgress.value, [0, 1], [menuStartTranslateX, 0]);
 
     return {
-      opacity: menuProgress.value > 0.05 ? 1 : 0,
+      opacity: interpolate(menuProgress.value, [0, 0.1, 1], [0, 1, 1]),
       transform: [{ translateX }, { translateY }, { scale }],
       pointerEvents: menuProgress.value > 0.5 ? "auto" : "none",
     };
@@ -170,14 +176,22 @@ export default function MagicMenu({
               menuAnimatedStyle,
               styles.shadow,
               {
+                position: "absolute",
+                left: menuLeft,
+                bottom: 0,
                 width: menuWidth,
                 backgroundColor: surfaceColor,
                 borderColor: menuBorderColor,
                 borderWidth: 0.5,
-                transformOrigin: "bottom right",
               } as any,
             ]}
-            className="mb-3 overflow-hidden rounded-[30px]"
+            className="overflow-hidden rounded-[30px]"
+            onLayout={(event) => {
+              const nextHeight = Math.round(event.nativeEvent.layout.height);
+              if (nextHeight !== menuHeight) {
+                setMenuHeight(nextHeight);
+              }
+            }}
           >
             <BlurView
               intensity={isDark ? 40 : 54}
@@ -219,7 +233,7 @@ export default function MagicMenu({
         ) : null}
 
         <Animated.View
-          style={[mainButtonAnimatedStyle, { alignSelf: "flex-end", marginRight: 24 }]}
+          style={[mainButtonAnimatedStyle, { alignSelf: "flex-end", marginRight: FAB_HORIZONTAL_MARGIN }]}
         >
           <TouchableOpacity
             activeOpacity={0.9}

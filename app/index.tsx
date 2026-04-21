@@ -1,30 +1,26 @@
 import {
-  createProject,
   fetchHomeData,
 } from "@/lib/repository";
+import type { HomeData } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { getThemeTokens } from "@/lib/theme";
-import { Icon, IconName } from "@/components/Icon";
-import { InlineComposer } from "@/components/InlineComposer";
+import { Icon, IconName, LIST_ICON_COLORS } from "@/components/Icon";
 import { QuickFindPullDown } from "@/components/QuickFindPullDown";
+import SectionAccordion from "@/components/SectionAccordion";
 import { AppText as Text } from "@/components/ui";
 import { COLOR_TOKENS, SPACING_TOKENS } from "@/lib/design-system/tokens";
-import { subscribeHomeInlineProjectComposer } from "@/lib/homeInlineProjectComposer";
 import { useFocusEffect } from "@react-navigation/native";
-import { Stack, router, useLocalSearchParams } from "expo-router";
+import { Stack, router } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
-  Animated,
-  Easing,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   TouchableOpacity,
-  unstable_batchedUpdates,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 interface ListItemProps {
   icon: IconName;
@@ -38,55 +34,51 @@ interface ListItemProps {
   titleClassName?: string;
 }
 
-type OverviewMetricKey =
-  | "todayJobs"
+type HomeLinkMetricKey =
+  | "allJobs"
+  | "clients"
+  | "invoices"
   | "scheduledJobs"
-  | "unscheduledJobs"
-  | "archivedJobs"
   | "completedJobs";
 
-const OVERVIEW_COUNT_ENABLED: Record<OverviewMetricKey, boolean> = {
-  todayJobs: false,
-  scheduledJobs: false,
-  unscheduledJobs: false,
-  archivedJobs: false,
-  completedJobs: false,
-};
+const ACCORDION_PREVIEW_LIMIT = 3;
+const HOME_FAB_SIZE = 64;
+const SETTINGS_LINK_HEIGHT = 34;
 
-const OVERVIEW_ITEMS = [
+const HOME_LINK_ITEMS = [
   {
-    icon: "today" as const,
+    icon: "project" as const,
     iconColor: "var(--color-today)",
-    title: "Today",
-    key: "todayJobs" as OverviewMetricKey,
-    route: "/today" as const,
+    title: "Projects",
+    key: "allJobs" as HomeLinkMetricKey,
+    route: "/jobs" as const,
+  },
+  {
+    icon: "client" as const,
+    iconColor: "var(--color-logbook)",
+    title: "Clients",
+    key: "clients" as HomeLinkMetricKey,
+    route: "/clients-home" as const,
+  },
+  {
+    icon: "dollar" as const,
+    iconColor: "var(--color-inbox)",
+    title: "Invoices",
+    key: "invoices" as HomeLinkMetricKey,
+    route: "/invoices" as const,
   },
   {
     icon: "upcoming" as const,
     iconColor: "var(--color-upcoming)",
     title: "Upcoming",
-    key: "scheduledJobs" as OverviewMetricKey,
+    key: "scheduledJobs" as HomeLinkMetricKey,
     route: "/upcoming" as const,
-  },
-  {
-    icon: "anytime" as const,
-    iconColor: "var(--color-anytime)",
-    title: "Anytime",
-    key: "unscheduledJobs" as OverviewMetricKey,
-    route: "/anytime" as const,
-  },
-  {
-    icon: "someday" as const,
-    iconColor: "var(--color-someday)",
-    title: "Someday",
-    key: "archivedJobs" as OverviewMetricKey,
-    route: "/someday" as const,
   },
   {
     icon: "logbook" as const,
     iconColor: "var(--color-logbook)",
     title: "Logbook",
-    key: "completedJobs" as OverviewMetricKey,
+    key: "completedJobs" as HomeLinkMetricKey,
     route: "/logbook" as const,
   },
 ];
@@ -106,6 +98,44 @@ function withOpacity(hexColor: string, opacity: number) {
   const b = Number.parseInt(full.slice(4, 6), 16);
 
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
+
+function formatPriceLabel(price: number | null | undefined) {
+  if (price === null || price === undefined || !Number.isFinite(price)) {
+    return null;
+  }
+
+  const rounded = Math.round(price * 100) / 100;
+  const hasDecimals = Math.abs(rounded % 1) > 0.000001;
+  const formatted = new Intl.NumberFormat("sr-RS", {
+    minimumFractionDigits: hasDecimals ? 2 : 0,
+    maximumFractionDigits: hasDecimals ? 2 : 0,
+  }).format(rounded);
+
+  return `${formatted} RSD`;
+}
+
+function formatPaymentDateLabel(dateIso: string | null | undefined) {
+  if (!dateIso) {
+    return "today";
+  }
+
+  const date = new Date(`${dateIso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return "today";
+  }
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (target.getTime() === today.getTime()) {
+    return "today";
+  }
+
+  const day = date.getDate();
+  const month = date.getMonth() + 1;
+  return `${day}. ${month}.`;
 }
 
 const ListItem = ({
@@ -173,13 +203,21 @@ function HeaderAction({
 }
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const { colorScheme } = useColorScheme();
+  const colorMode = colorScheme === "dark" ? "dark" : "light";
   const theme = getThemeTokens(colorScheme === "dark");
-  const { newProject } = useLocalSearchParams<{ newProject?: string }>();
-  const handledNewProjectTokenRef = useRef<string | null>(null);
-  const projectsDividerColor = withOpacity(COLOR_TOKENS.dark["text.primary"], 0.15);
-  const [isCreatingInline, setIsCreatingInline] = useState(false);
-  const [inlineText, setInlineText] = useState("");
+  const sectionDividerColor = withOpacity(COLOR_TOKENS[colorMode]["text.primary"], 0.15);
+  const projectStatusRingColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.58);
+  const projectStatusFillColor = LIST_ICON_COLORS["--color-upcoming"];
+  const debtItemIconColor = COLOR_TOKENS[colorMode]["primary.soft"];
+  const emptySectionEmbossTextStyle = {
+    color: withOpacity(COLOR_TOKENS[colorMode]["text.primary"], colorMode === "dark" ? 0.26 : 0.22),
+    textShadowColor:
+      colorMode === "dark" ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.72)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 0,
+  } as const;
   const [listCounts, setListCounts] = useState<Record<string, number>>({
     clients: 0,
     todayJobs: 0,
@@ -190,53 +228,185 @@ export default function HomeScreen() {
     archivedJobs: 0,
     invoices: 0,
   });
-  const [clients, setClients] = useState<
-    {
-      id: string;
-      title: string;
-      notes: string;
-      taskCount: number;
-    }[]
-  >([]);
+  const [activeProjects, setActiveProjects] = useState<HomeData["activeProjects"]>([]);
+  const [debts, setDebts] = useState<HomeData["debts"]>([]);
+  const [payments, setPayments] = useState<HomeData["payments"]>([]);
+  const [isHomeLoading, setIsHomeLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSettingsPressed, setIsSettingsPressed] = useState(false);
-  const [isInlineSaving, setIsInlineSaving] = useState(false);
-  const inlineSubmitLockRef = useRef(false);
-  const inlineFade = useRef(new Animated.Value(1)).current;
-  const inlineTextColor = COLOR_TOKENS.dark["text.primary"];
-  const inlineTextOpacity = 1;
-  const inlineIconColor = withOpacity(COLOR_TOKENS.dark["text.primary"], 0.86);
-  const inlinePlaceholderColor = withOpacity(
-    COLOR_TOKENS.dark["text.primary"],
-    0.72,
+  const [isActiveProjectsExpanded, setIsActiveProjectsExpanded] = useState(false);
+  const [isDebtsExpanded, setIsDebtsExpanded] = useState(false);
+  const [isPaymentsExpanded, setIsPaymentsExpanded] = useState(false);
+  const [isRemindersExpanded, setIsRemindersExpanded] = useState(false);
+  const [isActiveProjectsListExpanded, setIsActiveProjectsListExpanded] = useState(false);
+  const [isDebtsListExpanded, setIsDebtsListExpanded] = useState(false);
+  const [isPaymentsListExpanded, setIsPaymentsListExpanded] = useState(false);
+  const [isActiveProjectsMorePressed, setIsActiveProjectsMorePressed] = useState(false);
+  const [isDebtsMorePressed, setIsDebtsMorePressed] = useState(false);
+  const [isPaymentsMorePressed, setIsPaymentsMorePressed] = useState(false);
+  const paymentsMorePressedBg = withOpacity(
+    COLOR_TOKENS[colorMode]["bg.input"],
+    colorMode === "dark" ? 0.88 : 0.86,
   );
-  const inlineEditorBg = withOpacity(COLOR_TOKENS.dark["primary.default"], 0.78);
-  const openInlineProjectComposer = useCallback(() => {
-    setInlineText("");
-    setIsInlineSaving(false);
-    inlineFade.setValue(1);
-    setIsCreatingInline(true);
-  }, [inlineFade]);
+  const hiddenActiveProjectsCount = Math.max(
+    activeProjects.length - ACCORDION_PREVIEW_LIMIT,
+    0,
+  );
+  const visibleActiveProjects =
+    isActiveProjectsListExpanded || activeProjects.length <= ACCORDION_PREVIEW_LIMIT
+      ? activeProjects
+      : activeProjects.slice(0, ACCORDION_PREVIEW_LIMIT);
+  const hiddenDebtsCount = Math.max(debts.length - ACCORDION_PREVIEW_LIMIT, 0);
+  const visibleDebts =
+    isDebtsListExpanded || debts.length <= ACCORDION_PREVIEW_LIMIT
+      ? debts
+      : debts.slice(0, ACCORDION_PREVIEW_LIMIT);
+  const hiddenPaymentsCount = Math.max(payments.length - ACCORDION_PREVIEW_LIMIT, 0);
+  const visiblePayments =
+    isPaymentsListExpanded || payments.length <= ACCORDION_PREVIEW_LIMIT
+      ? payments
+      : payments.slice(0, ACCORDION_PREVIEW_LIMIT);
+  const homeFabBottom = Math.max(insets.bottom + 8, 20);
+  const settingsBottom = homeFabBottom + (HOME_FAB_SIZE - SETTINGS_LINK_HEIGHT) / 2;
+  const skeletonBaseColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.22 : 0.14,
+  );
+  const skeletonStrongColor = withOpacity(
+    COLOR_TOKENS[colorMode]["text.secondary"],
+    colorMode === "dark" ? 0.34 : 0.22,
+  );
+
+  const renderSimpleSectionSkeletonRows = (
+    count: number,
+    options?: { showTrailingAmount?: boolean },
+  ) => (
+    <View className="px-1">
+      {Array.from({ length: count }).map((_, index) => (
+        <View key={`simple-skeleton-${index}`} className="flex-row items-center min-h-[46px] py-2">
+          <View className="h-8 w-8 items-center justify-center">
+            <View
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: 10,
+                backgroundColor: skeletonBaseColor,
+              }}
+            />
+          </View>
+          <View className="ml-2 flex-1 pr-3">
+            <View
+              style={{
+                width: "64%",
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: skeletonStrongColor,
+              }}
+            />
+            <View
+              style={{
+                width: "46%",
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: skeletonBaseColor,
+                marginTop: 6,
+              }}
+            />
+          </View>
+          {options?.showTrailingAmount ? (
+            <View
+              style={{
+                width: 64,
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: skeletonStrongColor,
+              }}
+            />
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderPaymentsSectionSkeletonRows = (count: number) => (
+    <View className="px-1">
+      {Array.from({ length: count }).map((_, index) => (
+        <View key={`payments-skeleton-${index}`} className="flex-row items-center min-h-[46px] py-2">
+          <View className="w-6 items-center justify-center">
+            <View
+              style={{
+                width: 20,
+                height: 20,
+                borderRadius: 10,
+                backgroundColor: skeletonBaseColor,
+              }}
+            />
+          </View>
+
+          <View className="mr-1 w-[46px] items-center justify-center">
+            <View
+              style={{
+                width: 30,
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: skeletonStrongColor,
+              }}
+            />
+          </View>
+
+          <View className="min-w-0 flex-1 justify-center pr-2">
+            <View
+              style={{
+                width: "58%",
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: skeletonStrongColor,
+              }}
+            />
+            <View
+              style={{
+                width: "44%",
+                height: 8,
+                borderRadius: 4,
+                backgroundColor: skeletonBaseColor,
+                marginTop: 6,
+              }}
+            />
+          </View>
+
+          <View
+            style={{
+              width: 66,
+              height: 10,
+              borderRadius: 5,
+              backgroundColor: skeletonStrongColor,
+            }}
+          />
+        </View>
+      ))}
+    </View>
+  );
 
   const loadHomeData = useCallback(async () => {
+    setIsHomeLoading(true);
+
     if (!isSupabaseConfigured) {
+      setActiveProjects([]);
+      setDebts([]);
+      setPayments([]);
       setErrorMessage(
         "Supabase nije povezan. Dodaj EXPO_PUBLIC_SUPABASE_URL i EXPO_PUBLIC_SUPABASE_ANON_KEY u .env.",
       );
+      setIsHomeLoading(false);
       return;
     }
 
     try {
       const data = await fetchHomeData();
       setListCounts(data.metrics);
-      setClients(
-        data.clients.map((client) => ({
-          id: client.id,
-          title: client.name ?? "Novi projekat",
-          notes: client.note ?? "",
-          taskCount: client.jobCount,
-        })),
-      );
+      setActiveProjects(data.activeProjects);
+      setDebts(data.debts);
+      setPayments(data.payments);
       setErrorMessage(null);
     } catch (error) {
       setListCounts({
@@ -249,12 +419,16 @@ export default function HomeScreen() {
         archivedJobs: 0,
         invoices: 0,
       });
-      setClients([]);
+      setActiveProjects([]);
+      setDebts([]);
+      setPayments([]);
       setErrorMessage(
         error instanceof Error
           ? error.message
           : "Nisam uspeo da ucitam podatke sa Supabase.",
       );
+    } finally {
+      setIsHomeLoading(false);
     }
   }, []);
 
@@ -263,91 +437,6 @@ export default function HomeScreen() {
       void loadHomeData();
     }, [loadHomeData]),
   );
-
-  useEffect(() => {
-    return subscribeHomeInlineProjectComposer(() => {
-      openInlineProjectComposer();
-    });
-  }, [openInlineProjectComposer]);
-
-  useEffect(() => {
-    const newProjectToken = Array.isArray(newProject) ? newProject[0] : newProject;
-    if (!newProjectToken) {
-      handledNewProjectTokenRef.current = null;
-      return;
-    }
-    if (handledNewProjectTokenRef.current === newProjectToken) {
-      return;
-    }
-    handledNewProjectTokenRef.current = newProjectToken;
-
-    openInlineProjectComposer();
-  }, [newProject, openInlineProjectComposer]);
-
-  const handleInlineSubmit = async () => {
-    if (inlineSubmitLockRef.current) {
-      return;
-    }
-
-    const title = inlineText.trim();
-
-    if (!title) {
-      setIsCreatingInline(false);
-      setInlineText("");
-      setIsInlineSaving(false);
-      inlineFade.setValue(1);
-      return;
-    }
-
-    inlineSubmitLockRef.current = true;
-    let releaseLockInFinally = true;
-    setInlineText(title);
-    setIsInlineSaving(true);
-
-    try {
-      const createdProject = await createProject(title);
-      setErrorMessage(null);
-      inlineFade.stopAnimation();
-      inlineFade.setValue(1);
-      Animated.timing(inlineFade, {
-        toValue: 0,
-        duration: 90,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }).start(() => {
-        unstable_batchedUpdates(() => {
-          setClients((current) => [
-            {
-              id: createdProject.id,
-              title: createdProject.name ?? "Novi projekat",
-              notes: createdProject.note ?? "",
-              taskCount: 0,
-            },
-            ...current,
-          ]);
-          setListCounts((current) => ({
-            ...current,
-            clients: current.clients + 1,
-          }));
-          setIsCreatingInline(false);
-          setIsInlineSaving(false);
-          setInlineText("");
-          inlineSubmitLockRef.current = false;
-        });
-      });
-      releaseLockInFinally = false;
-      return;
-    } catch (error) {
-      setIsInlineSaving(false);
-      setErrorMessage(
-        error instanceof Error ? error.message : "Nisam uspeo da sacuvam projekat.",
-      );
-    } finally {
-      if (releaseLockInFinally && inlineSubmitLockRef.current) {
-        inlineSubmitLockRef.current = false;
-      }
-    }
-  };
 
   return (
     <SafeAreaView edges={["top"]} className="flex-1 bg-things-bg">
@@ -363,7 +452,7 @@ export default function HomeScreen() {
             headerRight: () => (
               <HeaderAction
                 icon="search"
-                onPress={() => console.log("Search")}
+                onPress={() => router.push("/quick-find" as never)}
               />
             ),
           }}
@@ -387,38 +476,13 @@ export default function HomeScreen() {
             </Text>
           ) : null}
 
-          <TouchableOpacity
-            className="mb-6 flex-row items-center px-1"
-            activeOpacity={0.72}
-            onPress={() => router.push("/inbox" as never)}
-          >
-            <Icon name="inbox" size={22} color="var(--color-inbox)" />
-            <View className="ml-2 flex-1">
-              <Text variant="bodyLg" className="font-semibold text-things-text">
-                Quick Tasks
-              </Text>
-            </View>
-            {(listCounts.unscheduledJobs ?? 0) > 0 ? (
-              <View className="min-w-[28px] items-end">
-                <Text className="font-medium text-label-sm text-things-muted">
-                  {listCounts.unscheduledJobs}
-                </Text>
-              </View>
-            ) : null}
-          </TouchableOpacity>
-
           <View className="mb-8">
-            {OVERVIEW_ITEMS.map((item) => (
-              <View key={item.title} className={item.key === "completedJobs" ? "mt-4" : ""}>
+            {HOME_LINK_ITEMS.map((item) => (
+              <View key={item.title}>
                 <ListItem
                   icon={item.icon}
                   iconColor={item.iconColor}
                   title={item.title}
-                  count={
-                    OVERVIEW_COUNT_ENABLED[item.key]
-                      ? (listCounts[item.key] ?? 0)
-                      : 0
-                  }
                   dense
                   onPress={() => router.push(item.route as never)}
                 />
@@ -426,55 +490,385 @@ export default function HomeScreen() {
             ))}
           </View>
 
-          {clients.length > 0 ? (
-            <View
-              className="mb-4 h-px"
-              style={{
-                backgroundColor: projectsDividerColor,
-                width: "96%",
-                alignSelf: "center",
-              }}
-            />
-          ) : null}
+          <View>
+            <SectionAccordion
+              title="Active Projects"
+              collapsedIcon="archiveOutline"
+              expandedIcon="archiveFilled"
+              isExpanded={isActiveProjectsExpanded}
+              onToggle={() =>
+                setIsActiveProjectsExpanded((current) => {
+                  const next = !current;
+                  if (!next) {
+                    setIsActiveProjectsListExpanded(false);
+                  }
+                  return next;
+                })
+              }
+              borderColor={sectionDividerColor}
+            >
+              {isHomeLoading ? (
+                renderSimpleSectionSkeletonRows(3)
+              ) : activeProjects.length > 0 ? (
+                visibleActiveProjects.map((activeProject) => (
+                  <TouchableOpacity
+                    key={activeProject.id}
+                    activeOpacity={0.72}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/job/[id]",
+                        params: { id: activeProject.id },
+                      })
+                    }
+                    className="flex-row items-center px-1 py-2"
+                  >
+                    <View className="h-8 w-8 items-center justify-center">
+                      <View
+                        className="items-center justify-center"
+                        style={{
+                          width: 20,
+                          height: 20,
+                          borderRadius: 10,
+                          borderWidth: 1.25,
+                          borderColor: projectStatusRingColor,
+                        }}
+                      >
+                        <View
+                          style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: 5,
+                            backgroundColor: projectStatusFillColor,
+                          }}
+                        />
+                      </View>
+                    </View>
+                    <View className="ml-2 flex-1">
+                      <Text variant="bodyMd" className="font-regular text-things-text">
+                        {activeProject.title}
+                      </Text>
+                      {activeProject.clientName ? (
+                        <Text
+                          variant="footer"
+                          className="font-regular text-things-muted"
+                          numberOfLines={1}
+                        >
+                          {activeProject.clientName}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                  <Text
+                    variant="labelSm"
+                    className="text-center italic"
+                    style={emptySectionEmbossTextStyle}
+                  >
+                    No active projects.
+                  </Text>
+                </View>
+              )}
+              {hiddenActiveProjectsCount > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPressIn={() => setIsActiveProjectsMorePressed(true)}
+                  onPressOut={() => setIsActiveProjectsMorePressed(false)}
+                  className="mt-2 self-start rounded-full py-1.5"
+                  style={{
+                    backgroundColor: isActiveProjectsMorePressed
+                      ? paymentsMorePressedBg
+                      : "transparent",
+                    marginLeft: -6,
+                    paddingHorizontal: 10,
+                  }}
+                  onPress={() =>
+                    setIsActiveProjectsListExpanded((current) => !current)
+                  }
+                >
+                  <Text
+                    className="font-medium"
+                    style={{
+                      color: COLOR_TOKENS[colorMode]["text.secondary"],
+                      fontSize: 11,
+                      lineHeight: 14,
+                    }}
+                  >
+                    {isActiveProjectsListExpanded
+                      ? "Show less"
+                      : `Show ${hiddenActiveProjectsCount} more`}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </SectionAccordion>
+          </View>
 
-          <View className="mb-2">
-            {isCreatingInline ? (
-              <InlineComposer
-                icon="project"
-                iconColor={inlineIconColor}
-                value={inlineText}
-                isSaving={isInlineSaving}
-                placeholder="New Project"
-                placeholderTextColor={inlinePlaceholderColor}
-                textColor={inlineTextColor}
-                textOpacity={inlineTextOpacity}
-                backgroundColor={inlineEditorBg}
-                backgroundFade={inlineFade}
-                selectionColor={inlineTextColor}
-                autoFocus
-                onChangeText={setInlineText}
-                onSubmit={() => void handleInlineSubmit()}
-              />
-            ) : null}
+          <View>
+            <SectionAccordion
+              title="Client Debts"
+              collapsedIcon="boxOutline"
+              expandedIcon="boxFilled"
+              isExpanded={isDebtsExpanded}
+              onToggle={() =>
+                setIsDebtsExpanded((current) => {
+                  const next = !current;
+                  if (!next) {
+                    setIsDebtsListExpanded(false);
+                  }
+                  return next;
+                })
+              }
+              borderColor={sectionDividerColor}
+            >
+              {isHomeLoading ? (
+                renderSimpleSectionSkeletonRows(3, { showTrailingAmount: true })
+              ) : debts.length > 0 ? (
+                visibleDebts.map((debt) => (
+                  <TouchableOpacity
+                    key={debt.jobId}
+                    activeOpacity={0.72}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/job/[id]",
+                        params: { id: debt.jobId },
+                      })
+                    }
+                    className="flex-row items-center min-h-[46px] px-1 py-2"
+                  >
+                    <View className="h-8 w-8 items-center justify-center">
+                      <View
+                        className="items-center justify-center"
+                        style={{
+                          width: 20,
+                          height: 20,
+                          borderRadius: 10,
+                          borderWidth: 1.25,
+                          borderColor: projectStatusRingColor,
+                        }}
+                      >
+                        <Icon name="dollar" size={12} color={debtItemIconColor} />
+                      </View>
+                    </View>
+                    <View className="ml-2 flex-1 pr-3">
+                      <Text variant="bodyMd" className="font-regular text-things-text">
+                        {debt.clientName}
+                      </Text>
+                      <Text
+                        variant="footer"
+                        className="font-regular text-things-muted"
+                        numberOfLines={1}
+                      >
+                        {debt.jobTitle}
+                      </Text>
+                    </View>
+                    <Text variant="labelSm" className="text-things-text">
+                      {formatPriceLabel(debt.amount) ?? "0 RSD"}
+                    </Text>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                  <Text
+                    variant="labelSm"
+                    className="text-center italic"
+                    style={emptySectionEmbossTextStyle}
+                  >
+                    No client debts.
+                  </Text>
+                </View>
+              )}
+              {hiddenDebtsCount > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPressIn={() => setIsDebtsMorePressed(true)}
+                  onPressOut={() => setIsDebtsMorePressed(false)}
+                  className="mt-2 self-start rounded-full py-1.5"
+                  style={{
+                    backgroundColor: isDebtsMorePressed
+                      ? paymentsMorePressedBg
+                      : "transparent",
+                    marginLeft: -6,
+                    paddingHorizontal: 10,
+                  }}
+                  onPress={() =>
+                    setIsDebtsListExpanded((current) => !current)
+                  }
+                >
+                  <Text
+                    className="font-medium"
+                    style={{
+                      color: COLOR_TOKENS[colorMode]["text.secondary"],
+                      fontSize: 11,
+                      lineHeight: 14,
+                    }}
+                  >
+                    {isDebtsListExpanded
+                      ? "Show less"
+                      : `Show ${hiddenDebtsCount} more`}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </SectionAccordion>
+          </View>
 
-            {clients.map((client) => (
-              <ListItem
-                key={client.id}
-                icon="project"
-                iconColor="var(--color-muted)"
-                title={client.title}
-                titleVariant="bodyMd"
-                titleClassName="font-regular text-things-text"
-                count={client.taskCount}
-                onPress={() =>
-                  router.push({
-                    pathname: "/project/[id]",
-                    params: { id: client.id },
-                  })
-                }
-              />
-            ))}
+          <View>
+            <SectionAccordion
+              title="Latest Payments"
+              collapsedIcon="dollar"
+              expandedIcon="dollar"
+              isExpanded={isPaymentsExpanded}
+              onToggle={() =>
+                setIsPaymentsExpanded((current) => {
+                  const next = !current;
+                  if (!next) {
+                    setIsPaymentsListExpanded(false);
+                  }
+                  return next;
+                })
+              }
+              borderColor={sectionDividerColor}
+            >
+              {isHomeLoading ? (
+                renderPaymentsSectionSkeletonRows(3)
+              ) : payments.length > 0 ? (
+                visiblePayments.map((payment) => {
+                  const paymentDateLabel = formatPaymentDateLabel(payment.paymentDate);
 
+                  return (
+                    <TouchableOpacity
+                      key={payment.id}
+                      activeOpacity={0.72}
+                      onPress={() =>
+                        router.push({
+                          pathname: "/job/[id]",
+                          params: { id: payment.jobId },
+                        })
+                      }
+                      className="flex-row items-center min-h-[46px] px-1 py-2"
+                    >
+                      <View className="w-6 items-center justify-center">
+                        <View
+                          className="items-center justify-center"
+                          style={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: 10,
+                            borderWidth: 1.25,
+                            borderColor: projectStatusRingColor,
+                          }}
+                        >
+                          <Icon name="dollar" size={12} color={debtItemIconColor} />
+                        </View>
+                      </View>
+
+                      <View className="mr-1 w-[46px] items-center justify-center">
+                        <Text
+                          className="text-center font-medium"
+                          style={{
+                            color: debtItemIconColor,
+                            fontSize: 11,
+                            lineHeight: 13,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {paymentDateLabel}
+                        </Text>
+                      </View>
+
+                      <View className="min-w-0 flex-1 justify-center pr-2">
+                        <Text
+                          variant="bodyMd"
+                          className="font-regular text-things-text"
+                          numberOfLines={1}
+                        >
+                          {payment.clientName?.trim() || "Unknown client"}
+                        </Text>
+                        <Text
+                          variant="footer"
+                          className="mt-0.5 font-regular text-things-muted"
+                          numberOfLines={1}
+                        >
+                          {payment.jobTitle}
+                        </Text>
+                      </View>
+
+                      <View className="w-[88px] items-end justify-center pl-2">
+                        <Text
+                          variant="labelSm"
+                          className="text-things-text"
+                          numberOfLines={1}
+                        >
+                          {formatPriceLabel(payment.amount) ?? "0 RSD"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                  <Text
+                    variant="labelSm"
+                    className="text-center italic"
+                    style={emptySectionEmbossTextStyle}
+                  >
+                    No payments yet.
+                  </Text>
+                </View>
+              )}
+              {hiddenPaymentsCount > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPressIn={() => setIsPaymentsMorePressed(true)}
+                  onPressOut={() => setIsPaymentsMorePressed(false)}
+                  className="mt-2 self-start rounded-full py-1.5"
+                  style={{
+                    backgroundColor: isPaymentsMorePressed
+                      ? paymentsMorePressedBg
+                      : "transparent",
+                    marginLeft: -6,
+                    paddingHorizontal: 10,
+                  }}
+                  onPress={() =>
+                    setIsPaymentsListExpanded((current) => !current)
+                  }
+                >
+                  <Text
+                    className="font-medium"
+                    style={{
+                      color: COLOR_TOKENS[colorMode]["text.secondary"],
+                      fontSize: 11,
+                      lineHeight: 14,
+                    }}
+                  >
+                    {isPaymentsListExpanded
+                      ? "Show less"
+                      : `Show ${hiddenPaymentsCount} more`}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </SectionAccordion>
+          </View>
+
+          <View className="mb-8">
+            <SectionAccordion
+              title="Reminders"
+              collapsedIcon="upcoming"
+              expandedIcon="upcoming"
+              isExpanded={isRemindersExpanded}
+              onToggle={() => setIsRemindersExpanded((current) => !current)}
+              borderColor={sectionDividerColor}
+            >
+              <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                <Text
+                  variant="labelSm"
+                  className="text-center italic"
+                  style={emptySectionEmbossTextStyle}
+                >
+                  No reminders yet.
+                </Text>
+              </View>
+            </SectionAccordion>
           </View>
         </ScrollView>
 
@@ -488,7 +882,7 @@ export default function HomeScreen() {
             zIndex: 30,
           }}
         >
-          <QuickFindPullDown />
+          <QuickFindPullDown onPress={() => router.push("/quick-find" as never)} />
         </View>
 
         <View
@@ -497,7 +891,7 @@ export default function HomeScreen() {
             position: "absolute",
             left: 0,
             right: 0,
-            bottom: 106,
+            bottom: settingsBottom,
             zIndex: 20,
             alignItems: "center",
           }}

@@ -1,6 +1,7 @@
 import { fetchProjectById } from "@/lib/repository";
 import { Icon } from "@/components/Icon";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import ProjectHeader from "@/components/ProjectHeader";
 import ProjectMenu from "@/components/ProjectMenu";
 import { COLOR_TOKENS } from "@/lib/design-system/tokens";
@@ -42,6 +43,7 @@ export default function ProjectScreen() {
   const [projectExists, setProjectExists] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
 
   const loadProject = useCallback(async () => {
     if (!id) {
@@ -189,6 +191,7 @@ export default function ProjectScreen() {
       <ProjectHeader
         title={projectTitle}
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.back()}
       />
 
@@ -196,6 +199,7 @@ export default function ProjectScreen() {
         className="flex-1 bg-things-bg px-5"
         onScroll={scrollHandler}
         scrollEventThrottle={16}
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 32 }}
       >
         <Animated.View

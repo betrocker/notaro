@@ -1,4 +1,3 @@
-import { ModalCircleButton } from "@/components/ModalCircleButton";
 import { Icon } from "@/components/Icon";
 import { TransparentModalShell } from "@/components/TransparentModalShell";
 import WhenCalendarModal from "@/components/WhenCalendarModal";
@@ -17,17 +16,15 @@ import {
   fetchPaymentJobs,
 } from "@/lib/repository";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { getThemeTokens } from "@/lib/theme";
 import { router, useLocalSearchParams } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Keyboard,
   Platform,
-  Pressable,
   ScrollView,
-  StyleSheet,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -44,9 +41,10 @@ function formatDateLabel(date: Date) {
 export default function NewPaymentScreen() {
   const { jobId: initialJobIdParam } = useLocalSearchParams<{ jobId?: string }>();
   const { colorScheme } = useColorScheme();
+  const { height: windowHeight } = useWindowDimensions();
   const isDark = colorScheme === "dark";
   const colorMode = isDark ? "dark" : "light";
-  const theme = getThemeTokens(isDark);
+  const formScrollRef = useRef<ScrollView | null>(null);
   const [amountInput, setAmountInput] = useState("");
   const [noteInput, setNoteInput] = useState("");
   const [paymentDate, setPaymentDate] = useState<Date>(new Date());
@@ -58,6 +56,8 @@ export default function NewPaymentScreen() {
   const [isDateModalOpen, setIsDateModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const [formContentHeight, setFormContentHeight] = useState(0);
   const [focusedField, setFocusedField] = useState<
     "job" | "amount" | "date" | "note" | null
   >(null);
@@ -77,6 +77,9 @@ export default function NewPaymentScreen() {
     : COLOR_TOKENS[colorMode]["text.primary"];
   const secondaryText = COLOR_TOKENS[colorMode]["text.secondary"];
   const selectionColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const confirmButtonBg = COLOR_TOKENS[colorMode]["primary.soft"];
+  const confirmButtonBorder = COLOR_TOKENS[colorMode]["primary.soft"];
+  const confirmButtonIcon = COLOR_TOKENS.light["bg.base"];
   const inputLabelColor = titleText;
   const focusBorderColor = COLOR_TOKENS[colorMode]["primary.soft"];
   const idleBorderColor = placeholderColor;
@@ -118,6 +121,12 @@ export default function NewPaymentScreen() {
     Number.isFinite(amountValue) &&
     amountValue > 0 &&
     Boolean(selectedJobId);
+  const keyboardLayoutInset = keyboardInset;
+  const usableHeight = Math.max(windowHeight - keyboardLayoutInset, 320);
+  const modalMaxHeight = Math.round(usableHeight * 0.82);
+  const formMaxHeight = Math.round(usableHeight * 0.62);
+  const formViewportHeight =
+    formContentHeight > 0 ? Math.min(formContentHeight, formMaxHeight) : formMaxHeight;
 
   useEffect(() => {
     let isMounted = true;
@@ -157,6 +166,35 @@ export default function NewPaymentScreen() {
       isMounted = false;
     };
   }, [initialJobId]);
+
+  useEffect(() => {
+    const showEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+
+    const showSubscription = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardInset(event.endCoordinates?.height ?? 0);
+    });
+    const hideSubscription = Keyboard.addListener(hideEvent, () => {
+      setKeyboardInset(0);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (keyboardInset <= 0 || focusedField !== "note") {
+      return;
+    }
+    const id = setTimeout(() => {
+      formScrollRef.current?.scrollToEnd({ animated: true });
+    }, 60);
+    return () => clearTimeout(id);
+  }, [keyboardInset, focusedField]);
 
   const closeModal = () => {
     Keyboard.dismiss();
@@ -209,64 +247,104 @@ export default function NewPaymentScreen() {
   });
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+    <SafeAreaView className="flex-1 bg-transparent" edges={["top"]}>
       <TransparentModalShell
         closeOnBackdropPress
         onBackdropPress={closeModal}
-        overlayStyle={styles.overlay}
+        overlayStyle={[
+          {
+            paddingHorizontal: SPACING_TOKENS.md,
+            paddingVertical: SPACING_TOKENS["2xl"],
+          },
+          keyboardLayoutInset > 0
+            ? { paddingBottom: SPACING_TOKENS["2xl"] + keyboardLayoutInset }
+            : null,
+        ]}
         contentStyle={[
-          styles.modalWindow,
-          styles.modalWindowShadow,
-          { backgroundColor: modalBg, borderColor },
+          {
+            width: "85%",
+            borderRadius: 28,
+            borderWidth: BORDER_WIDTH_TOKENS.subtle,
+            overflow: "hidden",
+          },
+          Platform.select({
+            ios: {
+              ...SHADOW_TOKENS.card.ios,
+            },
+            android: {
+              elevation: SHADOW_TOKENS.card.android.elevation,
+            },
+          }),
+          { backgroundColor: modalBg, borderColor, maxHeight: modalMaxHeight },
         ]}
         backdropColor={COLOR_TOKENS.dark["bg.overlay"]}
         backdropOpacity={isDark ? 0.64 : 0.4}
       >
-        <Pressable
-          style={styles.content}
-          onPress={() => {
-            Keyboard.dismiss();
-            setIsJobsListOpen(false);
-            setFocusedField(null);
-          }}
-        >
-          <View style={styles.header}>
-            <Text variant="bodyLg" style={[styles.headerTitle, { color: titleText }]}>
-              New Payment
-            </Text>
-            <View
-              style={[
-                styles.headerRightButton,
-                { opacity: canSave ? 1 : disabledOpacity },
-              ]}
-            >
-              <ModalCircleButton
-                icon="check"
-                theme={theme}
-                onPress={() => {
-                  if (!canSave) {
-                    return;
-                  }
-                  void handleSave();
-                }}
-              />
-            </View>
-          </View>
-
-          <ScrollView
-            style={styles.formScroll}
-            contentContainerStyle={styles.formContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {errorMessage ? (
-              <Text
-                className="mb-3 font-regular text-label-sm leading-5"
-                style={{ color: secondaryText }}
-              >
-                {errorMessage}
+        <View className="shrink">
+          <View className="shrink">
+            <View className="mb-1 mt-1.5 h-14 items-center justify-center">
+              <Text variant="bodyLg" className="text-center" style={{ color: titleText }}>
+                New Payment
               </Text>
-            ) : null}
+              <View
+                style={[
+                  { position: "absolute", top: 8, right: 16 },
+                  { opacity: canSave ? 1 : disabledOpacity },
+                ]}
+              >
+                <TouchableOpacity
+                  activeOpacity={0.82}
+                  className="h-9 w-9 items-center justify-center rounded-[18px] border"
+                  style={[
+                    {
+                      backgroundColor: confirmButtonBg,
+                      borderColor: confirmButtonBorder,
+                    },
+                  ]}
+                  onPress={() => {
+                    if (!canSave) {
+                      return;
+                    }
+                    void handleSave();
+                  }}
+                  disabled={!canSave}
+                >
+                  <Icon name="check" size={18} color={confirmButtonIcon} />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <ScrollView
+              ref={formScrollRef}
+              contentContainerStyle={{
+                paddingHorizontal: SPACING_TOKENS.lg,
+                paddingBottom: SPACING_TOKENS.lg,
+              }}
+              contentInsetAdjustmentBehavior="always"
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={
+                Platform.OS === "ios" ? "interactive" : "on-drag"
+              }
+              showsVerticalScrollIndicator={false}
+              nestedScrollEnabled
+              bounces={false}
+              overScrollMode="never"
+              scrollIndicatorInsets={{ bottom: SPACING_TOKENS.xs }}
+              onContentSizeChange={(_, height) => {
+                setFormContentHeight((current) =>
+                  Math.abs(current - height) > 1 ? height : current,
+                );
+              }}
+              style={{ flexGrow: 0, height: formViewportHeight }}
+            >
+              {errorMessage ? (
+                <Text
+                  className="mb-3 font-regular text-label-sm leading-5"
+                  style={{ color: secondaryText }}
+                >
+                  {errorMessage}
+                </Text>
+              ) : null}
 
             <Text
               className="mb-2 ml-1 font-semibold text-label-md"
@@ -282,8 +360,12 @@ export default function NewPaymentScreen() {
                 setIsJobsListOpen((current) => !current);
               }}
               style={[
-                styles.authField,
-                styles.rowField,
+                {
+                  borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                  borderRadius: RADIUS_TOKENS.control,
+                  paddingHorizontal: SPACING_TOKENS.md,
+                  justifyContent: "center",
+                },
                 {
                   height: fieldHeight,
                   borderRadius: controlRadius,
@@ -307,7 +389,12 @@ export default function NewPaymentScreen() {
             {isJobsListOpen ? (
               <View
                 style={[
-                  styles.jobsList,
+                  {
+                    marginTop: SPACING_TOKENS.xs,
+                    borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                    borderRadius: RADIUS_TOKENS.control,
+                    overflow: "hidden",
+                  },
                   {
                     backgroundColor: fieldBg,
                     borderColor:
@@ -340,7 +427,7 @@ export default function NewPaymentScreen() {
                   </Text>
                 ) : (
                   <ScrollView
-                    style={styles.jobsListScroll}
+                    style={{ maxHeight: 180 }}
                     nestedScrollEnabled
                     keyboardShouldPersistTaps="handled"
                   >
@@ -363,7 +450,11 @@ export default function NewPaymentScreen() {
                             setFocusedField(null);
                           }}
                           style={[
-                            styles.jobRow,
+                            {
+                              paddingHorizontal: SPACING_TOKENS.md,
+                              paddingVertical: SPACING_TOKENS.sm,
+                              borderBottomWidth: BORDER_WIDTH_TOKENS.subtle,
+                            },
                             {
                               borderBottomColor: idleBorderColor,
                               backgroundColor: isSelected
@@ -398,7 +489,7 @@ export default function NewPaymentScreen() {
               </View>
             ) : null}
 
-            <View style={styles.fieldSpacing} />
+            <View className="h-3" />
             <Text
               className="mb-2 ml-1 font-semibold text-label-md"
               style={{ color: inputLabelColor }}
@@ -408,7 +499,10 @@ export default function NewPaymentScreen() {
             <View
               className="px-3 py-0"
               style={[
-                styles.authField,
+                {
+                  borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                  borderRadius: RADIUS_TOKENS.control,
+                },
                 {
                   height: fieldHeight,
                   borderRadius: controlRadius,
@@ -439,7 +533,7 @@ export default function NewPaymentScreen() {
               />
             </View>
 
-            <View style={styles.fieldSpacing} />
+            <View className="h-3" />
             <Text
               className="mb-2 ml-1 font-semibold text-label-md"
               style={{ color: inputLabelColor }}
@@ -455,8 +549,12 @@ export default function NewPaymentScreen() {
                 setIsDateModalOpen(true);
               }}
               style={[
-                styles.authField,
-                styles.rowField,
+                {
+                  borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                  borderRadius: RADIUS_TOKENS.control,
+                  paddingHorizontal: SPACING_TOKENS.md,
+                  justifyContent: "center",
+                },
                 {
                   height: fieldHeight,
                   borderRadius: controlRadius,
@@ -476,48 +574,54 @@ export default function NewPaymentScreen() {
               </View>
             </TouchableOpacity>
 
-            <View style={styles.fieldSpacing} />
-            <Text
-              className="mb-2 ml-1 font-semibold text-label-md"
-              style={{ color: inputLabelColor }}
-            >
-              Note
-            </Text>
-            <View
-              className="px-3 py-2"
-              style={[
-                styles.authField,
-                styles.noteField,
-                {
-                  borderRadius: controlRadius,
-                  backgroundColor: fieldBg,
-                },
-                getFieldBorderStyle("note"),
-              ]}
-            >
-              <AppTextInput
-                value={noteInput}
-                onChangeText={setNoteInput}
+              <View className="h-3" />
+              <Text
+                className="mb-2 ml-1 font-semibold text-label-md"
+                style={{ color: inputLabelColor }}
+              >
+                Note
+              </Text>
+              <View
+                className="px-3 py-2"
+                style={[
+                  {
+                    borderWidth: BORDER_WIDTH_TOKENS.subtle,
+                    borderRadius: RADIUS_TOKENS.control,
+                    minHeight: 98,
+                  },
+                  {
+                    borderRadius: controlRadius,
+                    backgroundColor: fieldBg,
+                  },
+                  getFieldBorderStyle("note"),
+                ]}
+              >
+                <AppTextInput
+                  value={noteInput}
+                  onChangeText={setNoteInput}
                 onFocus={() => {
                   setFocusedField("note");
                   setIsJobsListOpen(false);
+                  setTimeout(() => {
+                    formScrollRef.current?.scrollToEnd({ animated: true });
+                  }, Platform.OS === "ios" ? 220 : 140);
                 }}
-                onBlur={() =>
-                  setFocusedField((current) => (current === "note" ? null : current))
-                }
-                variant="bodyMd"
-                placeholder="Optional note"
-                placeholderTextColor={placeholderColor}
-                selectionColor={selectionColor}
-                multiline
-                textAlignVertical="top"
-                className="min-h-[74px] leading-5 text-things-text"
-                style={{ color: inputText }}
-              />
-            </View>
-          </ScrollView>
-
-        </Pressable>
+                  onBlur={() =>
+                    setFocusedField((current) => (current === "note" ? null : current))
+                  }
+                  variant="bodyMd"
+                  placeholder="Optional note"
+                  placeholderTextColor={placeholderColor}
+                  selectionColor={selectionColor}
+                  multiline
+                  textAlignVertical="top"
+                  className="min-h-[74px] leading-5 text-things-text"
+                  style={{ color: inputText }}
+                />
+              </View>
+            </ScrollView>
+          </View>
+        </View>
       </TransparentModalShell>
 
       <WhenCalendarModal
@@ -531,85 +635,3 @@ export default function NewPaymentScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
-  overlay: {
-    paddingHorizontal: SPACING_TOKENS.md,
-    paddingVertical: SPACING_TOKENS["2xl"],
-  },
-  modalWindow: {
-    width: "85%",
-    height: "60%",
-    borderRadius: 28,
-    borderWidth: BORDER_WIDTH_TOKENS.subtle,
-    overflow: "hidden",
-    paddingBottom: SPACING_TOKENS.sm,
-  },
-  modalWindowShadow: {
-    ...Platform.select({
-      ios: {
-        ...SHADOW_TOKENS.card.ios,
-      },
-      android: {
-        elevation: SHADOW_TOKENS.card.android.elevation,
-      },
-    }),
-  },
-  content: {
-    flex: 1,
-  },
-  header: {
-    height: 56,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 6,
-    marginBottom: SPACING_TOKENS.xs,
-  },
-  headerTitle: {
-    textAlign: "center",
-  },
-  headerRightButton: {
-    position: "absolute",
-    top: 8,
-    right: 16,
-  },
-  formScroll: {
-    flex: 1,
-  },
-  formContent: {
-    paddingHorizontal: SPACING_TOKENS.lg,
-    paddingBottom: SPACING_TOKENS.lg,
-  },
-  authField: {
-    borderWidth: BORDER_WIDTH_TOKENS.subtle,
-    borderRadius: RADIUS_TOKENS.control,
-  },
-  rowField: {
-    paddingHorizontal: SPACING_TOKENS.md,
-    justifyContent: "center",
-  },
-  noteField: {
-    minHeight: 98,
-  },
-  fieldSpacing: {
-    height: SPACING_TOKENS.md,
-  },
-  jobsList: {
-    marginTop: SPACING_TOKENS.xs,
-    borderWidth: BORDER_WIDTH_TOKENS.subtle,
-    borderRadius: RADIUS_TOKENS.control,
-    overflow: "hidden",
-  },
-  jobsListScroll: {
-    maxHeight: 180,
-  },
-  jobRow: {
-    paddingHorizontal: SPACING_TOKENS.md,
-    paddingVertical: SPACING_TOKENS.sm,
-    borderBottomWidth: BORDER_WIDTH_TOKENS.subtle,
-  },
-});

@@ -197,6 +197,29 @@ export interface HomeData {
     invoices: number;
   };
   clients: Array<ProjectView & { jobCount: number }>;
+  activeProjects: Array<{
+    id: string;
+    title: string;
+    clientId: string | null;
+    clientName: string | null;
+  }>;
+  debts: Array<{
+    jobId: string;
+    jobTitle: string;
+    clientId: string;
+    clientName: string;
+    amount: number;
+  }>;
+  payments: Array<{
+    id: string;
+    jobId: string;
+    jobTitle: string;
+    clientId: string | null;
+    clientName: string | null;
+    note: string | null;
+    paymentDate: string | null;
+    amount: number;
+  }>;
 }
 
 function toDateOnlyIso(date: Date) {
@@ -256,16 +279,20 @@ function normalizeChecklistItems(
 export async function fetchHomeData(): Promise<HomeData> {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
-  const [clientsData, jobsResult, invoicesResult] = await Promise.all([
+  const [clientsData, jobsResult, invoicesResult, paymentsResult] = await Promise.all([
     fetchMergedClientsForUser(userId),
     supabase
       .from("jobs")
-      .select("id, client_id, title, status, scheduled_date, created_at, completed_at, archived_at")
-      .eq("user_id", userId),
+      .select("id, client_id, title, status, scheduled_date, created_at, completed_at, archived_at, price")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false }),
     supabase
       .from("invoices")
       .select("id", { count: "exact", head: true })
       .eq("user_id", userId),
+    supabase
+      .from("payments")
+      .select("id, job_id, amount, note, payment_date"),
   ]);
 
   if (jobsResult.error) {
@@ -274,6 +301,10 @@ export async function fetchHomeData(): Promise<HomeData> {
 
   if (invoicesResult.error) {
     throw invoicesResult.error;
+  }
+
+  if (paymentsResult.error) {
+    throw paymentsResult.error;
   }
 
   const jobCountByProject = new Map<string, number>();
@@ -300,6 +331,124 @@ export async function fetchHomeData(): Promise<HomeData> {
       jobCount: jobCountByProject.get(normalized.id) ?? 0,
     };
   });
+  const clientNameById = new Map(
+    clientsData.map((client) => [client.id, client.name ?? null]),
+  );
+  const jobById = new Map(
+    jobsResult.data.map((job) => [
+      job.id,
+      {
+        id: job.id,
+        title: job.title?.trim() || "Untitled job",
+        clientId: job.client_id ?? null,
+      },
+    ]),
+  );
+  const paidAmountByJobId = new Map<string, number>();
+
+  for (const payment of paymentsResult.data) {
+    if (!payment.job_id) {
+      continue;
+    }
+
+    const paymentAmount =
+      typeof payment.amount === "number" && Number.isFinite(payment.amount)
+        ? payment.amount
+        : 0;
+    paidAmountByJobId.set(
+      payment.job_id,
+      (paidAmountByJobId.get(payment.job_id) ?? 0) + paymentAmount,
+    );
+  }
+
+  const activeProjects = jobsResult.data
+    .filter(
+      (job) =>
+        job.status === "in_progress" && !job.completed_at && !job.archived_at,
+    )
+    .map((job) => ({
+      id: job.id,
+      title: job.title?.trim() || "Untitled job",
+      clientId: job.client_id ?? null,
+      clientName: job.client_id ? (clientNameById.get(job.client_id) ?? null) : null,
+    }));
+
+  const debts = jobsResult.data
+    .map((job) => {
+      if (!job.client_id || job.archived_at) {
+        return null;
+      }
+
+      const rawPrice =
+        typeof job.price === "number" && Number.isFinite(job.price) ? job.price : null;
+      if (rawPrice === null || rawPrice <= 0) {
+        return null;
+      }
+
+      const paidAmount = paidAmountByJobId.get(job.id) ?? 0;
+      const debtAmount = Math.max(rawPrice - paidAmount, 0);
+      if (debtAmount <= 0) {
+        return null;
+      }
+
+      const clientName = clientNameById.get(job.client_id)?.trim() || "Unknown client";
+      return {
+        jobId: job.id,
+        jobTitle: job.title?.trim() || "Untitled job",
+        clientId: job.client_id,
+        clientName,
+        amount: debtAmount,
+      };
+    })
+    .filter((item): item is HomeData["debts"][number] => Boolean(item))
+    .sort((left, right) => {
+      if (left.clientName === right.clientName) {
+        return left.jobTitle.localeCompare(right.jobTitle, "sr");
+      }
+      return left.clientName.localeCompare(right.clientName, "sr");
+    });
+
+  const payments = paymentsResult.data
+    .map((payment) => {
+      if (!payment.job_id) {
+        return null;
+      }
+
+      const job = jobById.get(payment.job_id);
+      if (!job) {
+        return null;
+      }
+
+      const paymentAmount =
+        typeof payment.amount === "number" && Number.isFinite(payment.amount)
+          ? payment.amount
+          : 0;
+      if (paymentAmount <= 0) {
+        return null;
+      }
+
+      const clientName = job.clientId ? (clientNameById.get(job.clientId) ?? null) : null;
+
+      return {
+        id: payment.id,
+        jobId: payment.job_id,
+        jobTitle: job.title,
+        clientId: job.clientId,
+        clientName,
+        note: payment.note ?? null,
+        paymentDate: payment.payment_date ?? null,
+        amount: paymentAmount,
+      };
+    })
+    .filter((item): item is HomeData["payments"][number] => Boolean(item))
+    .sort((left, right) => {
+      const leftTimestamp = left.paymentDate ? Date.parse(`${left.paymentDate}T00:00:00`) : -1;
+      const rightTimestamp = right.paymentDate ? Date.parse(`${right.paymentDate}T00:00:00`) : -1;
+      if (rightTimestamp !== leftTimestamp) {
+        return rightTimestamp - leftTimestamp;
+      }
+      return right.id.localeCompare(left.id, "sr");
+    });
 
   const todayDate = toDateOnlyIso(new Date());
   const metrics = {
@@ -329,7 +478,7 @@ export async function fetchHomeData(): Promise<HomeData> {
     invoices: invoicesResult.count ?? 0,
   };
 
-  return { metrics, clients };
+  return { metrics, clients, activeProjects, debts, payments };
 }
 
 export type JobsListItem = {
@@ -574,6 +723,20 @@ export async function fetchSomedayTodos() {
 export async function fetchLogbookTodos() {
   const { supabase, user } = await requireCurrentUser();
   const userId = user.id;
+  const purgeCutoff = new Date();
+  purgeCutoff.setDate(purgeCutoff.getDate() - 30);
+  const purgeResult = await supabase
+    .from("jobs")
+    .delete()
+    .eq("user_id", userId)
+    .not("completed_at", "is", null)
+    .is("archived_at", null)
+    .lt("completed_at", purgeCutoff.toISOString());
+
+  if (purgeResult.error) {
+    throw purgeResult.error;
+  }
+
   const result = await supabase
     .from("jobs")
     .select("id, title, completed_at")
@@ -1033,6 +1196,10 @@ export async function deleteInboxTodo(jobId: string) {
   if (result.error) {
     throw result.error;
   }
+}
+
+export async function deleteLogbookTodo(jobId: string) {
+  return deleteInboxTodo(jobId);
 }
 
 export async function assignClientToInboxTodo(

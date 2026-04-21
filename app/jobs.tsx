@@ -21,6 +21,7 @@ import {
 import { subscribeJobsInlineComposer } from "@/lib/jobsInlineComposer";
 import { setJobsSelectionActive } from "@/lib/jobsSelectionMode";
 import { isSupabaseConfigured } from "@/lib/supabase";
+import { useQuickFindPullToOpen } from "@/lib/useQuickFindPullToOpen";
 import { useFocusEffect } from "@react-navigation/native";
 import { Stack, router } from "expo-router";
 import { useColorScheme } from "nativewind";
@@ -553,6 +554,7 @@ export default function JobsScreen() {
   const dateLiftFadeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dateLiftClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollY = useSharedValue(0);
+  const quickFindRefreshControl = useQuickFindPullToOpen();
   const dateLiftVisualProgress = useSharedValue(0);
   const emptyIconColor = withOpacity(COLOR_TOKENS[colorMode]["text.secondary"], 0.5);
   const checkboxBorderColor = withOpacity(
@@ -1512,8 +1514,9 @@ export default function JobsScreen() {
       <Stack.Screen options={{ headerShown: false }} />
 
       <ProjectHeader
-        title="Jobs"
+        title="Projects"
         titleAnimatedStyle={headerTitleAnimatedStyle}
+        pullDownScrollY={scrollY}
         onBack={() => router.replace("/")}
       />
 
@@ -1523,6 +1526,7 @@ export default function JobsScreen() {
         onScroll={scrollHandler}
         scrollEventThrottle={16}
         keyboardShouldPersistTaps="handled"
+        refreshControl={quickFindRefreshControl}
         contentContainerStyle={{ paddingTop: 94, paddingBottom: 132, flexGrow: 1 }}
       >
         <Animated.View
@@ -1531,7 +1535,7 @@ export default function JobsScreen() {
         >
           <Icon name="briefcase" size={22} color="var(--color-inbox)" />
           <Text className="ml-2.5 font-bold text-things-text text-things-title-large">
-            Jobs
+            Projects
           </Text>
         </Animated.View>
 
