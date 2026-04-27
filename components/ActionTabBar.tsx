@@ -84,7 +84,6 @@ export function resolveActionTabFromSegment(
     segment === "job" ||
     segment === "today" ||
     segment === "inbox" ||
-    segment === "invoices" ||
     segment === "upcoming" ||
     segment === "anytime" ||
     segment === "someday" ||

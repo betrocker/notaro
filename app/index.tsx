@@ -7,12 +7,20 @@ import { getThemeTokens } from "@/lib/theme";
 import { Icon, IconName, LIST_ICON_COLORS } from "@/components/Icon";
 import { QuickFindPullDown } from "@/components/QuickFindPullDown";
 import SectionAccordion from "@/components/SectionAccordion";
+import SnoozeReminderModal, { type SnoozePreset } from "@/components/SnoozeReminderModal";
+import SwipeableActionRow from "@/components/SwipeableActionRow";
 import { AppText as Text } from "@/components/ui";
 import { COLOR_TOKENS, SPACING_TOKENS } from "@/lib/design-system/tokens";
+import {
+  fetchActiveReminders,
+  markReminderDone,
+  ReminderItem,
+  snoozeReminder,
+} from "@/lib/reminders";
 import { useFocusEffect } from "@react-navigation/native";
 import { Stack, router } from "expo-router";
 import { useColorScheme } from "nativewind";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -37,7 +45,6 @@ interface ListItemProps {
 type HomeLinkMetricKey =
   | "allJobs"
   | "clients"
-  | "invoices"
   | "scheduledJobs"
   | "completedJobs";
 
@@ -61,13 +68,6 @@ const HOME_LINK_ITEMS = [
     route: "/clients-home" as const,
   },
   {
-    icon: "dollar" as const,
-    iconColor: "var(--color-inbox)",
-    title: "Invoices",
-    key: "invoices" as HomeLinkMetricKey,
-    route: "/invoices" as const,
-  },
-  {
     icon: "upcoming" as const,
     iconColor: "var(--color-upcoming)",
     title: "Upcoming",
@@ -80,6 +80,7 @@ const HOME_LINK_ITEMS = [
     title: "Logbook",
     key: "completedJobs" as HomeLinkMetricKey,
     route: "/logbook" as const,
+    spacingTop: 10,
   },
 ];
 
@@ -136,6 +137,70 @@ function formatPaymentDateLabel(dateIso: string | null | undefined) {
   const day = date.getDate();
   const month = date.getMonth() + 1;
   return `${day}. ${month}.`;
+}
+
+function isSameDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
+function isReminderOverdue(remindAtIso: string) {
+  const remindAtMs = Date.parse(remindAtIso);
+  if (!Number.isFinite(remindAtMs)) {
+    return false;
+  }
+
+  return remindAtMs < Date.now();
+}
+
+function formatReminderWhenParts(remindAtIso: string) {
+  const remindAt = new Date(remindAtIso);
+  if (!Number.isFinite(remindAt.getTime())) {
+    return {
+      dateLabel: "Invalid date",
+      timeLabel: "--:--",
+    };
+  }
+
+  const timeLabel = remindAt.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  const now = new Date();
+  if (isSameDay(remindAt, now)) {
+    return {
+      dateLabel: "Today",
+      timeLabel,
+    };
+  }
+
+  return {
+    dateLabel: `${remindAt.getDate()}. ${remindAt.getMonth() + 1}.`,
+    timeLabel,
+  };
+}
+
+function getTonightDate(now = new Date()) {
+  const tonight = new Date(now);
+  tonight.setHours(20, 0, 0, 0);
+
+  if (tonight.getTime() <= now.getTime()) {
+    tonight.setDate(tonight.getDate() + 1);
+  }
+
+  return tonight;
+}
+
+function getTomorrowAtNineDate(now = new Date()) {
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  return tomorrow;
 }
 
 const ListItem = ({
@@ -241,13 +306,30 @@ export default function HomeScreen() {
   const [isActiveProjectsListExpanded, setIsActiveProjectsListExpanded] = useState(false);
   const [isDebtsListExpanded, setIsDebtsListExpanded] = useState(false);
   const [isPaymentsListExpanded, setIsPaymentsListExpanded] = useState(false);
+  const [isRemindersListExpanded, setIsRemindersListExpanded] = useState(false);
   const [isActiveProjectsMorePressed, setIsActiveProjectsMorePressed] = useState(false);
   const [isDebtsMorePressed, setIsDebtsMorePressed] = useState(false);
   const [isPaymentsMorePressed, setIsPaymentsMorePressed] = useState(false);
+  const [isRemindersMorePressed, setIsRemindersMorePressed] = useState(false);
+  const [reminders, setReminders] = useState<ReminderItem[]>([]);
+  const [isRemindersLoading, setIsRemindersLoading] = useState(true);
+  const [remindersErrorMessage, setRemindersErrorMessage] = useState<string | null>(null);
+  const [snoozeReminderId, setSnoozeReminderId] = useState<string | null>(null);
+  const [doneReminderId, setDoneReminderId] = useState<string | null>(null);
   const paymentsMorePressedBg = withOpacity(
     COLOR_TOKENS[colorMode]["bg.input"],
     colorMode === "dark" ? 0.88 : 0.86,
   );
+  const reminderOverdueColor = "#D15B52";
+  const reminderUpcomingColor = COLOR_TOKENS[colorMode]["primary.default"];
+  const reminderActionBg = withOpacity(
+    COLOR_TOKENS[colorMode]["bg.input"],
+    colorMode === "dark" ? 0.92 : 0.88,
+  );
+  const reminderSwipeRevealBg =
+    colorMode === "dark" ? "#3A3D42" : "#E2E5EA";
+  const reminderSwipeActionBg = LIST_ICON_COLORS["--color-today"];
+  const reminderSwipeActionIconColor = "#FFFFFF";
   const hiddenActiveProjectsCount = Math.max(
     activeProjects.length - ACCORDION_PREVIEW_LIMIT,
     0,
@@ -266,6 +348,38 @@ export default function HomeScreen() {
     isPaymentsListExpanded || payments.length <= ACCORDION_PREVIEW_LIMIT
       ? payments
       : payments.slice(0, ACCORDION_PREVIEW_LIMIT);
+  const orderedReminders = useMemo(() => {
+    return [...reminders].sort((left, right) => {
+      const leftOverdue = isReminderOverdue(left.remindAt);
+      const rightOverdue = isReminderOverdue(right.remindAt);
+      if (leftOverdue !== rightOverdue) {
+        return leftOverdue ? -1 : 1;
+      }
+
+      const leftTimestamp = Date.parse(left.remindAt);
+      const rightTimestamp = Date.parse(right.remindAt);
+      if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp)) {
+        if (leftTimestamp !== rightTimestamp) {
+          return leftTimestamp - rightTimestamp;
+        }
+      } else if (Number.isFinite(leftTimestamp)) {
+        return -1;
+      } else if (Number.isFinite(rightTimestamp)) {
+        return 1;
+      }
+
+      return left.createdAt.localeCompare(right.createdAt, "sr");
+    });
+  }, [reminders]);
+  const hiddenRemindersCount = Math.max(orderedReminders.length - ACCORDION_PREVIEW_LIMIT, 0);
+  const visibleReminders =
+    isRemindersListExpanded || orderedReminders.length <= ACCORDION_PREVIEW_LIMIT
+      ? orderedReminders
+      : orderedReminders.slice(0, ACCORDION_PREVIEW_LIMIT);
+  const snoozeReminderTarget = useMemo(
+    () => reminders.find((item) => item.id === snoozeReminderId) ?? null,
+    [reminders, snoozeReminderId],
+  );
   const homeFabBottom = Math.max(insets.bottom + 8, 20);
   const settingsBottom = homeFabBottom + (HOME_FAB_SIZE - SETTINGS_LINK_HEIGHT) / 2;
   const skeletonBaseColor = withOpacity(
@@ -432,10 +546,94 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const loadReminders = useCallback(async () => {
+    setIsRemindersLoading(true);
+    try {
+      const activeReminders = await fetchActiveReminders();
+      setReminders(activeReminders);
+      setRemindersErrorMessage(null);
+    } catch (error) {
+      setReminders([]);
+      setRemindersErrorMessage(
+        error instanceof Error ? error.message : "Nisam uspeo da ucitam reminders.",
+      );
+    } finally {
+      setIsRemindersLoading(false);
+    }
+  }, []);
+
+  const handleOpenReminder = useCallback((reminder: ReminderItem) => {
+    if (reminder.jobId) {
+      router.push({
+        pathname: "/job/[id]",
+        params: { id: reminder.jobId },
+      });
+      return;
+    }
+
+    router.push({
+      pathname: "/new-reminder",
+      params: { reminderId: reminder.id },
+    });
+  }, []);
+
+  const handleDoneReminder = useCallback(
+    async (reminderId: string) => {
+      setDoneReminderId(reminderId);
+      try {
+        await markReminderDone(reminderId);
+        await loadReminders();
+      } finally {
+        setDoneReminderId((current) => (current === reminderId ? null : current));
+      }
+    },
+    [loadReminders],
+  );
+
+  const handleSnoozeReminder = useCallback(
+    async (reminderId: string, nextDate: Date) => {
+      await snoozeReminder(reminderId, nextDate);
+      setSnoozeReminderId(null);
+      await loadReminders();
+    },
+    [loadReminders],
+  );
+
+  const handleSwipeOpenReminderSnooze = useCallback((reminderId: string) => {
+    if (doneReminderId) {
+      return;
+    }
+
+    setSnoozeReminderId(reminderId);
+  }, [doneReminderId]);
+
+  const handleSelectSnoozePreset = useCallback(
+    (preset: SnoozePreset) => {
+      if (!snoozeReminderTarget) {
+        return;
+      }
+
+      const nextDate =
+        preset === "oneHour"
+          ? new Date(Date.now() + 60 * 60 * 1000)
+          : preset === "tonight"
+            ? getTonightDate()
+            : getTomorrowAtNineDate();
+
+      void handleSnoozeReminder(snoozeReminderTarget.id, nextDate).catch((error) => {
+        setRemindersErrorMessage(
+          error instanceof Error ? error.message : "Nisam uspeo da odlozim reminder.",
+        );
+      });
+    },
+    [handleSnoozeReminder, snoozeReminderTarget],
+  );
+
   useFocusEffect(
     useCallback(() => {
       void loadHomeData();
-    }, [loadHomeData]),
+      void loadReminders();
+    }, [loadHomeData, loadReminders]),
   );
 
   return (
@@ -478,7 +676,7 @@ export default function HomeScreen() {
 
           <View className="mb-8">
             {HOME_LINK_ITEMS.map((item) => (
-              <View key={item.title}>
+              <View key={item.title} style={{ marginTop: item.spacingTop ?? 0 }}>
                 <ListItem
                   icon={item.icon}
                   iconColor={item.iconColor}
@@ -856,18 +1054,181 @@ export default function HomeScreen() {
               collapsedIcon="upcoming"
               expandedIcon="upcoming"
               isExpanded={isRemindersExpanded}
-              onToggle={() => setIsRemindersExpanded((current) => !current)}
+              onToggle={() =>
+                setIsRemindersExpanded((current) => {
+                  const next = !current;
+                  if (!next) {
+                    setIsRemindersListExpanded(false);
+                  }
+                  return next;
+                })
+              }
               borderColor={sectionDividerColor}
             >
-              <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
-                <Text
-                  variant="labelSm"
-                  className="text-center italic"
-                  style={emptySectionEmbossTextStyle}
+              {isRemindersLoading ? (
+                renderSimpleSectionSkeletonRows(2)
+              ) : remindersErrorMessage ? (
+                <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                  <Text
+                    variant="labelSm"
+                    className="text-center"
+                    style={{ color: COLOR_TOKENS[colorMode]["text.secondary"] }}
+                  >
+                    {remindersErrorMessage}
+                  </Text>
+                </View>
+              ) : reminders.length > 0 ? (
+                <View className="px-1">
+                  {visibleReminders.map((reminder) => {
+                    const { dateLabel, timeLabel } = formatReminderWhenParts(reminder.remindAt);
+                    const projectLabel =
+                      reminder.jobTitle?.trim() || reminder.clientName?.trim() || null;
+                    const isDoneSubmitting = doneReminderId === reminder.id;
+                    const reminderAccentColor = isReminderOverdue(reminder.remindAt)
+                      ? reminderOverdueColor
+                      : reminderUpcomingColor;
+
+                    return (
+                      <SwipeableActionRow
+                        key={reminder.id}
+                        disabled={Boolean(doneReminderId) || Boolean(snoozeReminderId)}
+                        onSwipeLeft={() => handleSwipeOpenReminderSnooze(reminder.id)}
+                        revealBackgroundColor={reminderSwipeRevealBg}
+                        actionBackgroundColor={reminderSwipeActionBg}
+                        actionIconColor={reminderSwipeActionIconColor}
+                        actionIcon="bell"
+                      >
+                        <View className="flex-row items-center min-h-[46px] px-1 py-2">
+                          <View className="w-6 items-center justify-center">
+                            <TouchableOpacity
+                              activeOpacity={0.82}
+                              className="items-center justify-center"
+                              style={{
+                                width: 18,
+                                height: 18,
+                                borderRadius: 4,
+                                borderWidth: 1.25,
+                                borderColor: reminderAccentColor,
+                                backgroundColor: isDoneSubmitting
+                                  ? withOpacity(reminderAccentColor, colorMode === "dark" ? 0.88 : 0.9)
+                                  : "transparent",
+                              }}
+                              disabled={Boolean(doneReminderId)}
+                              onPress={() => {
+                                void handleDoneReminder(reminder.id).catch((error) => {
+                                  setRemindersErrorMessage(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Nisam uspeo da oznacim reminder kao done.",
+                                  );
+                                });
+                              }}
+                            >
+                              {isDoneSubmitting ? (
+                                <Icon name="check" size={11} color={COLOR_TOKENS.light["bg.base"]} />
+                              ) : null}
+                            </TouchableOpacity>
+                          </View>
+
+                          <View className="mr-1 w-[46px] items-center justify-center">
+                            <Text
+                              className="text-center font-medium"
+                              style={{
+                                color: reminderAccentColor,
+                                fontSize: 11,
+                                lineHeight: 13,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {dateLabel}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            activeOpacity={0.76}
+                            className="min-w-0 flex-1 justify-center pr-2"
+                            onPress={() => handleOpenReminder(reminder)}
+                          >
+                            <View className="min-w-0 flex-row items-center">
+                              <Text
+                                variant="bodyMd"
+                                className="min-w-0 flex-1 font-regular text-things-text"
+                                numberOfLines={1}
+                              >
+                                {reminder.title}
+                              </Text>
+                              <View className="ml-2 flex-row items-center">
+                                <Icon
+                                  name="bell"
+                                  size={12}
+                                  color={COLOR_TOKENS[colorMode]["text.secondary"]}
+                                />
+                                <Text
+                                  variant="footer"
+                                  className="ml-1 font-regular text-things-muted"
+                                  numberOfLines={1}
+                                >
+                                  {timeLabel}
+                                </Text>
+                              </View>
+                            </View>
+                            {projectLabel ? (
+                              <Text
+                                variant="footer"
+                                className="mt-0.5 font-regular text-things-muted"
+                                numberOfLines={1}
+                              >
+                                {projectLabel}
+                              </Text>
+                            ) : null}
+                          </TouchableOpacity>
+                        </View>
+                      </SwipeableActionRow>
+                    );
+                  })}
+                </View>
+              ) : (
+                <View className="mt-2 mx-1 min-h-[48px] items-center justify-center rounded-xl px-5 py-3">
+                  <Text
+                    variant="labelSm"
+                    className="text-center italic"
+                    style={emptySectionEmbossTextStyle}
+                  >
+                    No reminders yet.
+                  </Text>
+                </View>
+              )}
+              {hiddenRemindersCount > 0 ? (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPressIn={() => setIsRemindersMorePressed(true)}
+                  onPressOut={() => setIsRemindersMorePressed(false)}
+                  className="mt-2 self-start rounded-full py-1.5"
+                  style={{
+                    backgroundColor: isRemindersMorePressed
+                      ? paymentsMorePressedBg
+                      : "transparent",
+                    marginLeft: -6,
+                    paddingHorizontal: 10,
+                  }}
+                  onPress={() =>
+                    setIsRemindersListExpanded((current) => !current)
+                  }
                 >
-                  No reminders yet.
-                </Text>
-              </View>
+                  <Text
+                    className="font-medium"
+                    style={{
+                      color: COLOR_TOKENS[colorMode]["text.secondary"],
+                      fontSize: 11,
+                      lineHeight: 14,
+                    }}
+                  >
+                    {isRemindersListExpanded
+                      ? "Show less"
+                      : `Show ${hiddenRemindersCount} more`}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
             </SectionAccordion>
           </View>
         </ScrollView>
@@ -947,6 +1308,16 @@ export default function HomeScreen() {
             </View>
           </TouchableOpacity>
         </View>
+
+        <SnoozeReminderModal
+          visible={Boolean(snoozeReminderTarget)}
+          title={snoozeReminderTarget?.title ?? ""}
+          colorMode={colorMode}
+          theme={theme}
+          actionBackgroundColor={reminderActionBg}
+          onClose={() => setSnoozeReminderId(null)}
+          onSelectPreset={handleSelectSnoozePreset}
+        />
 
       </KeyboardAvoidingView>
     </SafeAreaView>

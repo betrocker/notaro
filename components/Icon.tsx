@@ -141,6 +141,10 @@ const ICON_MAP = {
     ios: "dollarsign.circle",
     android: "currency-usd",
   },
+  bell: {
+    ios: "bell.fill",
+    android: "bell-outline",
+  },
   client: {
     ios: "person.2",
     android: "account-group-outline",

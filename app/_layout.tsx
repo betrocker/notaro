@@ -175,9 +175,10 @@ function RootNavigator({
   const inClients = rootSegment === "clients";
   const inNewTodo = rootSegment === "new-todo";
   const inNewPayment = rootSegment === "new-payment";
+  const inNewReminder = rootSegment === "new-reminder";
   const inQuickFind = rootSegment === "quick-find";
   const inModalSurface =
-    inSettings || inClients || inNewTodo || inNewPayment || inQuickFind;
+    inSettings || inClients || inNewTodo || inNewPayment || inNewReminder || inQuickFind;
   const activeTab = resolveActionTabFromSegment(rootSegment);
   const showGlobalMagicMenu =
     !!session && !inAuth && !onWelcome && !inModalSurface;
@@ -221,6 +222,14 @@ function RootNavigator({
       iconColor: "var(--color-logbook)",
       onPress: () => router.push("/clients"),
     },
+    {
+      key: "reminder",
+      label: "New Reminder",
+      description: "Set a reminder with date, optional note, and linked job.",
+      icon: "bell",
+      iconColor: "var(--color-upcoming)",
+      onPress: () => router.push("/new-reminder"),
+    },
   ];
   const homeMagicActions: MagicMenuAction[] = [
     {
@@ -246,6 +255,14 @@ function RootNavigator({
       icon: "dollar",
       iconColor: "var(--color-today)",
       onPress: () => router.push("/new-payment"),
+    },
+    {
+      key: "reminder",
+      label: "New Reminder",
+      description: "Set a reminder with date, optional note, and linked job.",
+      icon: "bell",
+      iconColor: "var(--color-upcoming)",
+      onPress: () => router.push("/new-reminder"),
     },
   ];
   const magicMenuActions = activeTab === "home" ? homeMagicActions : defaultMagicActions;
@@ -280,7 +297,6 @@ function RootNavigator({
         <Stack.Screen name="clients-home" options={{ headerShown: false }} />
         <Stack.Screen name="today" options={{ headerShown: false }} />
         <Stack.Screen name="inbox" options={{ headerShown: false }} />
-        <Stack.Screen name="invoices" options={{ headerShown: false }} />
         <Stack.Screen name="upcoming" options={{ headerShown: false }} />
         <Stack.Screen name="anytime" options={{ headerShown: false }} />
         <Stack.Screen name="someday" options={{ headerShown: false }} />
@@ -337,6 +353,15 @@ function RootNavigator({
         />
         <Stack.Screen
           name="new-payment"
+          options={{
+            presentation: "transparentModal",
+            animation: "none",
+            headerShown: false,
+            contentStyle: { backgroundColor: "transparent" },
+          }}
+        />
+        <Stack.Screen
+          name="new-reminder"
           options={{
             presentation: "transparentModal",
             animation: "none",

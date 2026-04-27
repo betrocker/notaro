@@ -45,15 +45,6 @@ const QUICK_FIND_LINKS_CONFIG: QuickFindLinkConfig[] = [
     keywords: ["clients", "people", "contacts"],
   },
   {
-    id: "invoices",
-    title: "Invoices",
-    subtitle: "Billing overview",
-    href: "/invoices",
-    icon: "dollar",
-    iconColor: "var(--color-inbox)",
-    keywords: ["invoices", "billing", "payments", "money"],
-  },
-  {
     id: "today",
     title: "Today",
     subtitle: "Today tasks",
@@ -113,8 +104,6 @@ function resolveQuickFindHrefFromSegment(segment: string | undefined): string | 
       return "/today";
     case "inbox":
       return "/inbox";
-    case "invoices":
-      return "/invoices";
     case "upcoming":
       return "/upcoming";
     case "logbook":

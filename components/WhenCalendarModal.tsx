@@ -1,4 +1,4 @@
-import { Icon, LIST_ICON_COLORS } from "@/components/Icon";
+import { Icon, LIST_ICON_COLORS, type IconName } from "@/components/Icon";
 import { ModalCircleButton } from "@/components/ModalCircleButton";
 import { TransparentModalShell } from "@/components/TransparentModalShell";
 import { AppText as Text } from "@/components/ui";
@@ -42,6 +42,35 @@ const DETAIL_WEEK_ROW_MARGIN = 2;
 const DETAIL_SEPARATOR_STROKE = 2;
 const DETAIL_SEPARATOR_RADIUS = 8;
 const CLEAR_ACTION_COLOR = LIST_ICON_COLORS["--color-upcoming"];
+
+function withOpacity(hexColor: string, opacity: number) {
+  if (!hexColor.startsWith("#")) {
+    return hexColor;
+  }
+
+  const sanitized = hexColor.replace("#", "");
+  const full =
+    sanitized.length === 3
+      ? sanitized
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : sanitized;
+
+  if (full.length < 6) {
+    return hexColor;
+  }
+
+  const r = Number.parseInt(full.slice(0, 2), 16);
+  const g = Number.parseInt(full.slice(2, 4), 16);
+  const b = Number.parseInt(full.slice(4, 6), 16);
+
+  if ([r, g, b].some((part) => Number.isNaN(part))) {
+    return hexColor;
+  }
+
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
 
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
@@ -211,6 +240,12 @@ interface WhenCalendarModalProps {
   selectedDate?: Date | null;
   selectedWhen?: "none" | "date" | "today" | "someday";
   mode?: CalendarModalMode;
+  footerActionLabel?: string;
+  footerActionIcon?: IconName;
+  footerActionValue?: string | null;
+  footerActionValueColor?: string;
+  onFooterActionPress?: () => void;
+  onFooterActionClear?: () => void;
 }
 
 function MonthGrid({
@@ -272,7 +307,37 @@ function MonthGrid({
       firstVisibleWeekIndex += 1;
     }
 
-    return weeks.slice(firstVisibleWeekIndex).flat();
+    const minimumVisibleWeeks = 4;
+    const selectedWeeks = weeks.slice(
+      firstVisibleWeekIndex,
+      firstVisibleWeekIndex + minimumVisibleWeeks,
+    );
+    const flattened = selectedWeeks.flat();
+
+    if (flattened.length >= minimumVisibleWeeks * 7) {
+      return flattened.slice(0, minimumVisibleWeeks * 7);
+    }
+
+    const filled = [...flattened];
+    let cursor =
+      flattened.length > 0
+        ? addDays(flattened[flattened.length - 1].date, 1)
+        : today;
+
+    while (filled.length < minimumVisibleWeeks * 7) {
+      filled.push({
+        key: `roll-${toDateKey(cursor)}-${filled.length}`,
+        dayNumber: cursor.getDate(),
+        date: cursor,
+        isCurrentMonth:
+          cursor.getMonth() === monthStart.getMonth() &&
+          cursor.getFullYear() === monthStart.getFullYear(),
+        isToday: toDateKey(cursor) === todayKey,
+      });
+      cursor = addDays(cursor, 1);
+    }
+
+    return filled;
   }, [cells, isMinimumMonth, todayTime]);
 
   return (
@@ -387,8 +452,7 @@ function MonthGrid({
                   <Text
                     variant="bodyMd"
                     style={{
-                      color: cell.isCurrentMonth ? primaryText : secondaryText,
-                      opacity: cell.isCurrentMonth ? 1 : 0.44,
+                      color: primaryText,
                     }}
                   >
                     {cell.dayNumber}
@@ -660,6 +724,12 @@ export default function WhenCalendarModal({
   selectedDate,
   selectedWhen = "none",
   mode = "when",
+  footerActionLabel,
+  footerActionIcon = "plusfab",
+  footerActionValue,
+  footerActionValueColor,
+  onFooterActionPress,
+  onFooterActionClear,
 }: WhenCalendarModalProps) {
   const isDeadlineMode = mode === "deadline";
   const today = useMemo(() => dayStart(new Date()), []);
@@ -719,6 +789,16 @@ export default function WhenCalendarModal({
     ? COLOR_TOKENS.light["bg.modal"]
     : primaryText;
   const selectionAccentColor = COLOR_TOKENS.light["primary.default"];
+  const footerPrimaryColor = primaryText;
+  const footerSecondaryColor = secondaryText;
+  const footerLeftColor = footerActionValue ? footerPrimaryColor : footerSecondaryColor;
+  const confirmButtonBg = COLOR_TOKENS[colorMode]["primary.soft"];
+  const confirmButtonBorder = withOpacity(confirmButtonBg, isDark ? 0.9 : 0.75);
+  const confirmButtonIcon = COLOR_TOKENS.light["bg.base"];
+  const hasReminderValue = !isDeadlineMode && Boolean(footerActionValue);
+  const footerClearBadgeBg = isDark
+    ? withOpacity(COLOR_TOKENS.light["bg.modal"], 0.22)
+    : withOpacity(COLOR_TOKENS.light["bg.base"], 0.92);
   const selectedDateKey = useMemo(() => {
     if (!selectedDate) {
       return null;
@@ -731,9 +811,9 @@ export default function WhenCalendarModal({
     return toDateKey(dayStart(selectedDate));
   }, [isDeadlineMode, selectedDate, selectedWhen]);
   const isTodaySelected = selectedWhen === "today";
-  const isSomedaySelected = selectedWhen === "someday";
   const canClearSelection = selectedWhen !== "none";
   const canClearDeadlineSelection = isDeadlineMode && selectedDateKey !== null;
+  const isDetailLayout = isDeadlineMode || page === "detail";
 
   const pageTranslateX =
     pageWidth > 0
@@ -801,6 +881,7 @@ export default function WhenCalendarModal({
           visible
           contentStyle={[
             styles.modalWindow,
+            isDetailLayout ? styles.modalWindowDetail : styles.modalWindowAuto,
             styles.modalWindowShadow,
             {
               borderColor,
@@ -828,50 +909,81 @@ export default function WhenCalendarModal({
               {isDeadlineMode ? "Deadline" : "When?"}
             </Text>
             <View style={styles.headerRightButton}>
-              <ModalCircleButton icon="close" theme={theme} onPress={onClose} />
+              {hasReminderValue ? (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={onClose}
+                  style={[
+                    styles.headerConfirmButton,
+                    {
+                      backgroundColor: confirmButtonBg,
+                      borderColor: confirmButtonBorder,
+                    },
+                  ]}
+                >
+                  <Icon name="check" size={18} color={confirmButtonIcon} />
+                </TouchableOpacity>
+              ) : (
+                <ModalCircleButton icon="close" theme={theme} onPress={onClose} />
+              )}
             </View>
           </View>
-          <View style={styles.pagesViewport} onLayout={onPageViewportLayout}>
+          <View
+            style={[
+              styles.pagesViewport,
+              !isDetailLayout ? styles.pagesViewportAuto : null,
+            ]}
+            onLayout={onPageViewportLayout}
+          >
             {pageWidth > 0 && !isDeadlineMode ? (
               <Animated.View
                 style={[
                   styles.pagesTrack,
+                  !isDetailLayout ? styles.pagesTrackAuto : null,
                   {
                     width: pageWidth * 2,
                     transform: [{ translateX: pageTranslateX as never }],
                   },
                 ]}
               >
-                <View style={[styles.quickPage, { width: pageWidth }]}>
-                  <TouchableOpacity
-                    activeOpacity={0.78}
-                    style={styles.todayRow}
-                    onPress={handleSelectToday}
-                  >
-                    <View style={styles.rowLabelContent}>
-                      <Icon
-                        name="today"
-                        size={TODAY_ROW_STAR_SIZE}
-                        color="var(--color-today)"
-                        weight="light"
-                      />
-                      <Text
-                        className="ml-2 font-semibold"
-                        variant="labelSm"
-                        style={{ color: primaryText }}
-                      >
-                        Today
-                      </Text>
-                    </View>
-                    {isTodaySelected ? (
-                      <Icon
-                        name="check"
-                        size={18}
-                        color={selectionAccentColor}
-                        weight="medium"
-                      />
-                    ) : null}
-                  </TouchableOpacity>
+                <View
+                  style={[
+                    styles.quickPage,
+                    !isDetailLayout ? styles.quickPageAuto : null,
+                    { width: pageWidth },
+                  ]}
+                >
+                  {onSelectToday ? (
+                    <TouchableOpacity
+                      activeOpacity={0.78}
+                      style={styles.todayRow}
+                      onPress={handleSelectToday}
+                    >
+                      <View style={styles.rowLabelContent}>
+                        <Icon
+                          name="today"
+                          size={TODAY_ROW_STAR_SIZE}
+                          color="var(--color-today)"
+                          weight="light"
+                        />
+                        <Text
+                          className="ml-2 font-semibold"
+                          variant="labelSm"
+                          style={{ color: primaryText }}
+                        >
+                          Today
+                        </Text>
+                      </View>
+                      {isTodaySelected ? (
+                        <Icon
+                          name="check"
+                          size={18}
+                          color={selectionAccentColor}
+                          weight="medium"
+                        />
+                      ) : null}
+                    </TouchableOpacity>
+                  ) : null}
 
                   <View style={styles.quickCalendarWrap}>
                     <MonthGrid
@@ -888,38 +1000,70 @@ export default function WhenCalendarModal({
                     />
                   </View>
 
-                  <TouchableOpacity
-                    activeOpacity={0.78}
-                    style={styles.somedayRow}
-                    onPress={() => {
-                      onSelectSomeday?.();
-                      onClose();
-                    }}
-                  >
-                    <View style={styles.rowLabelContent}>
-                      <Icon
-                        name="someday"
-                        size={TODAY_ROW_STAR_SIZE}
-                        color="var(--color-someday)"
-                        weight="light"
-                      />
-                      <Text
-                        className="ml-2 font-semibold"
-                        variant="labelSm"
-                        style={{ color: primaryText }}
-                      >
-                        Someday
-                      </Text>
-                    </View>
-                    {isSomedaySelected ? (
-                      <Icon
-                        name="check"
-                        size={18}
-                        color={selectionAccentColor}
-                        weight="medium"
-                      />
-                    ) : null}
-                  </TouchableOpacity>
+                  {footerActionLabel && onFooterActionPress ? (
+                    <TouchableOpacity
+                      activeOpacity={0.78}
+                      style={[
+                        styles.footerActionButton,
+                        hasReminderValue ? styles.footerActionButtonWithSeparator : null,
+                        hasReminderValue ? { borderTopColor: borderColor } : null,
+                      ]}
+                      onPress={onFooterActionPress}
+                    >
+                      <View style={styles.footerActionContentRow}>
+                        <View style={styles.rowLabelContent}>
+                          <Icon
+                            name={footerActionIcon}
+                            size={footerActionIcon === "plusfab" ? 24 : 20}
+                            color={footerLeftColor}
+                            weight="medium"
+                          />
+                          <Text
+                            className="ml-2 font-medium"
+                            variant="bodyMd"
+                            style={{ color: footerLeftColor }}
+                          >
+                            {footerActionLabel}
+                          </Text>
+                        </View>
+
+                        {footerActionValue ? (
+                          <View style={styles.footerActionValueRow}>
+                            <Text
+                              variant="bodyMd"
+                              className="font-semibold"
+                              style={{
+                                color: footerActionValueColor ?? selectionAccentColor,
+                              }}
+                            >
+                              {footerActionValue}
+                            </Text>
+
+                            {onFooterActionClear ? (
+                              <TouchableOpacity
+                                activeOpacity={0.75}
+                                onPress={(event) => {
+                                  event.stopPropagation();
+                                  onFooterActionClear();
+                                }}
+                                style={[
+                                  styles.footerActionClearButton,
+                                  { backgroundColor: footerClearBadgeBg },
+                                ]}
+                              >
+                                <Icon
+                                  name="close"
+                                  size={13}
+                                  color={secondaryText}
+                                  weight="medium"
+                                />
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  ) : null}
 
                   {canClearSelection ? (
                     <View style={styles.quickPageFooter}>
@@ -934,6 +1078,7 @@ export default function WhenCalendarModal({
                       </TouchableOpacity>
                     </View>
                   ) : null}
+
                 </View>
 
                 <View style={{ width: pageWidth, flex: 1 }}>
@@ -1075,16 +1220,29 @@ const styles = StyleSheet.create({
     top: 8,
     right: 16,
   },
+  headerConfirmButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   headerTitle: {
     textAlign: "center",
   },
   modalWindow: {
     width: "85%",
-    height: "60%",
     borderWidth: 0.5,
     borderRadius: 28,
     overflow: "hidden",
     paddingBottom: 14,
+  },
+  modalWindowAuto: {
+    alignSelf: "center",
+  },
+  modalWindowDetail: {
+    height: "60%",
   },
   modalWindowShadow: {
     ...Platform.select({
@@ -1099,24 +1257,69 @@ const styles = StyleSheet.create({
   overlay: {
     paddingHorizontal: 16,
     paddingVertical: 24,
+    justifyContent: "center",
+    alignItems: "center",
   },
   pagesTrack: {
     flexDirection: "row",
     flex: 1,
   },
+  pagesTrackAuto: {
+    flex: 0,
+  },
   pagesViewport: {
     flex: 1,
     overflow: "hidden",
   },
+  pagesViewportAuto: {
+    flex: 0,
+  },
   quickPage: {
     flex: 1,
+  },
+  quickPageAuto: {
+    flex: 0,
   },
   quickCalendarWrap: {
     marginTop: 4,
     paddingHorizontal: 10,
   },
   quickPageFooter: {
-    marginTop: "auto",
+    marginTop: 2,
+  },
+  footerActionButton: {
+    marginTop: 6,
+    marginHorizontal: 16,
+    minHeight: 40,
+    borderRadius: 14,
+    alignItems: "flex-start",
+    justifyContent: "flex-start",
+    alignSelf: "stretch",
+    paddingHorizontal: 0,
+    paddingVertical: 4,
+  },
+  footerActionButtonWithSeparator: {
+    borderTopWidth: 0.5,
+    marginTop: 8,
+    paddingTop: 8,
+  },
+  footerActionContentRow: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  footerActionValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  footerActionClearButton: {
+    marginLeft: 8,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
   },
   rowLabelContent: {
     flexDirection: "row",
